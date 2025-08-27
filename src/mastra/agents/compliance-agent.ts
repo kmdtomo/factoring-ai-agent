@@ -8,7 +8,7 @@ import {
   // documentOcrTool, // 一時停止
   // documentOcrVisionTool, // 一時停止
   kintoneFetchTool,
-  kintoneFetchFilesTool,
+  // kintoneFetchFilesTool, // 一時停止
 } from "../tools";
 import type { ComplianceAssessmentResult } from "../types";
 
@@ -19,7 +19,7 @@ export const complianceAgent = new Agent({
   model: openai("gpt-4.1"),
   tools: {
     kintoneFetchTool,
-    kintoneFetchFilesTool,
+    // kintoneFetchFilesTool, // 一時停止
     egoSearchTool,
     companyVerifyTool,
     paymentAnalysisTool,
@@ -31,9 +31,8 @@ export const complianceAgent = new Agent({
 
 【超重要：必ず実行するツールの順序】
 1. kintoneFetchTool → 必ず最初に実行
-2. kintoneFetchToolの結果にfileKeysがある場合 → 必ずkintoneFetchFilesTool実行（recordIdとfileKeysを渡す）
-3. kintoneFetchFilesToolの結果にfilesがある場合 → （現在はOCRを一時停止中のためスキップ）
-4. egoSearchTool、companyVerifyTool、paymentAnalysisToolを実行
+2. kintoneFetchToolの結果にfileKeysがある場合 → （現在はファイル取得を一時停止中のためスキップ）
+3. egoSearchTool、companyVerifyTool、paymentAnalysisToolを実行
 
 【最重要指示：分析的なレポート作成】
 単なるデータの羅列ではなく、プロフェッショナルな審査レポートとして以下の観点で分析的な文章を作成してください：
@@ -92,8 +91,7 @@ export const complianceAgent = new Agent({
      ※公式サイトがなくても企業情報サイトでの掲載を確認
    - paymentAnalysisTool: 支払い条件とリスク分析（買取情報と担保情報がある場合は必ず実行）
    
-4. 【参考】kintoneFetchFilesToolの結果を確認：
-   - 現在OCR処理は一時停止中のため、添付ファイルは件数のみレポートに記載
+4. 【参考】添付ファイル：現在は取得/解析を一時停止中。件数のみ把握。
      
 【OCR処理：一時停止中】
 運用注記：OCR処理は一時停止中です。再開時に以下の方針を適用します（参考）。

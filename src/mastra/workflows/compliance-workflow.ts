@@ -5,7 +5,7 @@ import { complianceAgent } from "../agents/compliance-agent";
 import type { ComplianceAssessmentResult, StreamingEvent } from "../types";
 import {
   kintoneFetchTool,
-  kintoneFetchFilesTool,
+  // kintoneFetchFilesTool, // 一時停止
   egoSearchTool,
   companyVerifyTool,
   paymentAnalysisTool,
@@ -30,7 +30,8 @@ const runComplianceAnalysisStep = createStep({
     
     // 事前に全ツールを強制実行（入力不足時は空配列などで実行）
     let kintoneResult: any = null;
-    let filesResult: any = null;
+    // ファイル取得は一時停止
+    let filesResult: any = { success: true, files: [], skippedFiles: [], message: "kintoneFetchFiles temporarily disabled" };
     let egoResult: any = null;
     let companyResult: any = null;
     let paymentResult: any = null;
@@ -50,20 +51,7 @@ const runComplianceAnalysisStep = createStep({
     }
     
     const fileKeys = Array.isArray(kintoneResult?.fileKeys) ? kintoneResult.fileKeys : [];
-    try {
-      filesResult = await kintoneFetchFilesTool.execute({
-        context: {
-          recordId,
-          fileKeys,
-          maxFiles: 10,
-        },
-        runtimeContext: new RuntimeContext(),
-      });
-      console.log(`[WF] kintoneFetchFilesTool: files=${filesResult?.files?.length ?? 0}, skipped=${filesResult?.skippedFiles?.length ?? 0}`);
-    } catch (e) {
-      filesResult = { success: false, files: [], skippedFiles: [], error: e instanceof Error ? e.message : "unknown" };
-      console.error(`[WF] kintoneFetchFilesTool error:`, e);
-    }
+    console.log(`[WF] kintoneFetchFilesTool temporarily disabled. fileKeys=${fileKeys.length}`);
     
     const representativeName = kintoneResult?.record?.basic?.代表者名 || "不明";
     const birthDate = kintoneResult?.record?.basic?.生年月日;
@@ -127,7 +115,7 @@ const runComplianceAnalysisStep = createStep({
     console.log(`[WF] OCR tools temporarily disabled. files=${files.length}`);
     
     // エージェントに直接レコードID＋ツール実行サマリーを渡して実行
-    const message = `レコードID: ${recordId}\n\n[ツール実行サマリー]\n- kintoneFetchTool: ${kintoneResult?.success === false ? "error" : "ok"}\n- kintoneFetchFilesTool: files=${files?.length || 0}\n- documentOcrTool: skipped\n- documentOcrVisionTool: skipped\n- egoSearchTool: negative=${egoResult?.summary?.hasNegativeInfo ?? false}\n- companyVerifyTool: verified=${companyResult?.verified ?? false}, confidence=${companyResult?.confidence ?? 0}\n- paymentAnalysisTool: gap=${paymentResult?.collateralGap ?? 0}`;
+    const message = `レコードID: ${recordId}\n\n[ツール実行サマリー]\n- kintoneFetchTool: ${kintoneResult?.success === false ? "error" : "ok"}\n- kintoneFetchFilesTool: skipped\n- documentOcrTool: skipped\n- documentOcrVisionTool: skipped\n- egoSearchTool: negative=${egoResult?.summary?.hasNegativeInfo ?? false}\n- companyVerifyTool: verified=${companyResult?.verified ?? false}, confidence=${companyResult?.confidence ?? 0}\n- paymentAnalysisTool: gap=${paymentResult?.collateralGap ?? 0}`;
     
     try {
       // エージェントを実行（maxStepsを増やしてツール実行回数を確保）
