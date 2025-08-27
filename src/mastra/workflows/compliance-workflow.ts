@@ -115,7 +115,7 @@ const runComplianceAnalysisStep = createStep({
     console.log(`[WF] OCR tools temporarily disabled. files=${files.length}`);
     
     // エージェントに直接レコードID＋ツール実行サマリーを渡して実行
-    const message = `レコードID: ${recordId}\n\n[ツール実行サマリー]\n- kintoneFetchTool: ${kintoneResult?.success === false ? "error" : "ok"}\n- kintoneFetchFilesTool: skipped\n- documentOcrTool: skipped\n- documentOcrVisionTool: skipped\n- egoSearchTool: negative=${egoResult?.summary?.hasNegativeInfo ?? false}\n- companyVerifyTool: verified=${companyResult?.verified ?? false}, confidence=${companyResult?.confidence ?? 0}\n- paymentAnalysisTool: gap=${paymentResult?.collateralGap ?? 0}`;
+    const message = `レコードID: ${recordId}\n\n[ツール実行サマリー]\n- kintoneFetchTool: ${kintoneResult?.success === false ? "error" : "ok"}\n- egoSearchTool: negative=${egoResult?.summary?.hasNegativeInfo ?? false}\n- companyVerifyTool: verified=${companyResult?.verified ?? false}, confidence=${companyResult?.confidence ?? 0}\n- paymentAnalysisTool: gap=${paymentResult?.collateralGap ?? 0}`;
     
     try {
       // エージェントを実行（maxStepsを増やしてツール実行回数を確保）

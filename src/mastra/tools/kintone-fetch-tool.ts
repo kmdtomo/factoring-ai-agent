@@ -107,76 +107,14 @@ export const kintoneFetchTool = createTool({
         },
       };
       
-      // 添付ファイル情報を収集
-      const allFiles: Array<{
-        fieldCode: string;
-        fileKey: string;
-        name: string;
-        contentType: string;
-        category: string;
-      }> = [];
-      const attachmentFields = [
-        { fieldCode: '買取情報_成因証書_謄本類_名刺等_添付ファイル', category: 'invoice' },
-        { fieldCode: '通帳_メイン_添付ファイル', category: 'bank_statement' },
-        { fieldCode: '通帳_その他_添付ファイル', category: 'bank_statement' },
-        { fieldCode: '顧客情報_添付ファイル', category: 'identity' },
-        { fieldCode: '他社資料_添付ファイル', category: 'other' },
-        { fieldCode: '担保情報_成因証書_謄本類_名刺等_添付ファイル', category: 'invoice' },
-        { fieldCode: 'その他_添付ファイル', category: 'other' },
-        // ユーザー指摘の「資料類」を明示対応
-        { fieldCode: '資料類', category: 'other' },
-      ];
-      
-      const seenFileKeys = new Set<string>();
-      
-      // 既知フィールドから収集
-      for (const field of attachmentFields) {
-        const files = (record as any)[field.fieldCode]?.value || [];
-        if (Array.isArray(files) && files.length > 0) {
-          console.log(`[KintoneFetch] attachments found in ${field.fieldCode}: count=${files.length}`);
-          for (const file of files) {
-            if (file?.fileKey && !seenFileKeys.has(file.fileKey)) {
-              seenFileKeys.add(file.fileKey);
-              allFiles.push({
-                fieldCode: field.fieldCode,
-                fileKey: file.fileKey,
-                name: file.name,
-                contentType: file.contentType,
-                category: field.category,
-              });
-            }
-          }
-        }
-      }
-      
-      // 汎用スキャン（未知の添付フィールドも拾う）
-      for (const [fieldCode, fieldValue] of Object.entries(record)) {
-        const val = (fieldValue as any)?.value;
-        if (Array.isArray(val) && val.length > 0 && val[0] && typeof val[0] === 'object' && 'fileKey' in val[0]) {
-          const candidateFiles = val as Array<any>;
-          console.log(`[KintoneFetch] generic attachment field detected: ${fieldCode}, count=${candidateFiles.length}`);
-          for (const file of candidateFiles) {
-            if (file?.fileKey && !seenFileKeys.has(file.fileKey)) {
-              seenFileKeys.add(file.fileKey);
-              allFiles.push({
-                fieldCode,
-                fileKey: file.fileKey,
-                name: file.name,
-                contentType: file.contentType,
-                category: inferCategoryFromFieldCode(fieldCode, file.name),
-              });
-            }
-          }
-        }
-      }
-      
-      console.log(`[KintoneFetch] total attachments collected: ${allFiles.length}`);
+      // 添付ファイル収集は無効化（無限ループ防止）
+      console.log(`[KintoneFetch] attachment collection disabled`);
       
       return {
         success: true,
         record: kintoneRecord,
-        fileKeys: allFiles,
-        message: `レコードID: ${recordId} を取得しました（添付ファイル: ${allFiles.length}個）`,
+        fileKeys: [],
+        message: `レコードID: ${recordId} を取得しました（添付ファイル収集は無効化）`,
       };
       
     } catch (error) {
@@ -187,16 +125,3 @@ export const kintoneFetchTool = createTool({
     }
   },
 });
-
-function inferCategoryFromFieldCode(fieldCode: string, fileName: string): string {
-  if (fieldCode.includes('通帳')) return 'bank_statement';
-  if (fieldCode.includes('顧客情報')) return 'identity';
-  if (fieldCode.includes('買取情報') || fieldCode.includes('担保情報')) {
-    if (fileName.includes('請求')) return 'invoice';
-    if (fileName.includes('名刺')) return 'business_card';
-    if (fileName.includes('謄本')) return 'registry';
-    return 'invoice';
-  }
-  if (fieldCode.includes('資料')) return 'other';
-  return 'other';
-}

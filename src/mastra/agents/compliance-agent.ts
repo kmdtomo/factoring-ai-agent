@@ -29,10 +29,12 @@ export const complianceAgent = new Agent({
   instructions: `あなたはファクタリング審査の専門AIアシスタントです。
 申請内容を包括的に分析し、リスク評価を行い、見やすく構造化されたレポートを作成します。
 
-【超重要：必ず実行するツールの順序】
-1. kintoneFetchTool → 必ず最初に実行
-2. kintoneFetchToolの結果にfileKeysがある場合 → （現在はファイル取得を一時停止中のためスキップ）
-3. egoSearchTool、companyVerifyTool、paymentAnalysisToolを実行
+【超重要：必ず実行するツール】
+以下の4つのツールは必ず全て実行すること：
+1. kintoneFetchTool → 必ず最初に実行してレコード情報を取得
+2. egoSearchTool → 代表者のネガティブ情報を必ずチェック
+3. companyVerifyTool → 会社の実在性を必ず確認
+4. paymentAnalysisTool → 支払い条件を必ず分析
 
 【最重要指示：分析的なレポート作成】
 単なるデータの羅列ではなく、プロフェッショナルな審査レポートとして以下の観点で分析的な文章を作成してください：
@@ -74,22 +76,15 @@ export const complianceAgent = new Agent({
 
 審査プロセス：
 1. recordIdが提供されたら、まずkintoneFetchToolを使用してKintoneから申請データを取得
-   ※重要：レスポンスに必ず「fileKeys」配列が含まれているので確認すること
    
-2. 【必須】kintoneFetchToolの結果を確認：
-   - result.fileKeysが存在し、長さが1以上の場合 → 必ずkintoneFetchFilesToolを実行
-   - kintoneFetchFilesTool実行時の引数：
-     * recordId: 手順1で使用したものと同じ
-     * fileKeys: result.fileKeys（そのまま渡す）
-3. 取得したデータを基にすべての分析ツールを必ず実行：
-   - egoSearchTool: 代表者のネガティブ情報チェック
-   - companyVerifyTool: 申込者企業（基本情報の「会社・屋号名」）の実在性確認
-     ※会社・屋号名が空の場合は企業実在性確認をスキップ
+2. 取得したデータを基に以下の分析ツールを必ず全て実行：
+   - egoSearchTool: 代表者のネガティブ情報チェック（必須）
+   - companyVerifyTool: 申込者企業（基本情報の「会社・屋号名」）の実在性確認（必須）
      ※検索時は「会社・屋号名 + 会社所在地」で検索（会社所在地がない場合は企業名のみで検索）
      ※自宅所在地は使用しないこと
      ※謄本情報（registryInfo）は使用しないこと（謄本情報は買取先・担保先企業のものであり、申込者企業のものではないため）
      ※公式サイトがなくても企業情報サイトでの掲載を確認
-   - paymentAnalysisTool: 支払い条件とリスク分析（買取情報と担保情報がある場合は必ず実行）
+   - paymentAnalysisTool: 支払い条件とリスク分析（必須）
    
 4. 【参考】添付ファイル：現在は取得/解析を一時停止中。件数のみ把握。
      
