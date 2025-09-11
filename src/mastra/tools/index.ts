@@ -5,3 +5,15 @@ export { documentOcrTool } from './document-ocr-tool';
 export { documentOcrVisionTool } from './document-ocr-vision-tool';
 export { kintoneFetchTool } from './kintone-fetch-tool';
 export { kintoneFetchFilesTool } from './kintone-fetch-files-tool';
+
+// v2 ツール
+export { documentOcrVerificationTool } from './document-ocr-verification-tool';
+export { paymentAnalysisV2Tool } from './payment-analysis-v2-tool';
+
+// v2 個別OCRツール
+export { ocrPurchaseInfoTool } from './ocr-purchase-info-tool';
+export { ocrBankStatementTool } from './ocr-bank-statement-tool';
+export { ocrIdentityTool } from './ocr-identity-tool';
+export { ocrRegistryTool } from './ocr-registry-tool';
+export { ocrCollateralTool } from './ocr-collateral-tool';
+export { purchaseDataPrepTool } from './purchase-data-prep-tool';

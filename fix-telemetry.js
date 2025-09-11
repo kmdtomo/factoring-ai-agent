@@ -13,9 +13,11 @@ if (fs.existsSync(telemetryConfigPath)) {
   const content = fs.readFileSync(telemetryConfigPath, 'utf8');
   
   // Remove the problematic mastra reference and default export
-  const fixedContent = content
-    .replace(/var mastra\$1 = mastra;\n/, '')
-    .replace(/export { mastra\$1 as default, telemetry };/, 'export { telemetry };');
+  const fixedContent = `const telemetry = {
+  enabled: false
+};
+
+export { telemetry };`;
   
   fs.writeFileSync(telemetryConfigPath, fixedContent);
   console.log('Fixed telemetry-config.mjs');

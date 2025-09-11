@@ -40,6 +40,30 @@ export const kintoneFetchTool = createTool({
       const record = response.data.records[0];
       console.log(`[KintoneFetch] record keys: ${Object.keys(record).join(', ')}`);
       
+      // デバッグ: すべてのフィールドキーを確認
+      const fileRelatedKeys = Object.keys(record).filter(key => 
+        key.includes('ファイル') || 
+        key.includes('添付') || 
+        key.includes('通帳') || 
+        key.includes('買取') ||
+        key.includes('file') ||
+        key.includes('File')
+      );
+      console.log(`[KintoneFetch] ファイル関連フィールド:`, fileRelatedKeys);
+      
+      // 各フィールドの内容を確認
+      fileRelatedKeys.forEach(key => {
+        const field = record[key];
+        if (field && field.value) {
+          console.log(`[KintoneFetch] ${key}:`, {
+            type: field.type,
+            valueType: Array.isArray(field.value) ? 'array' : typeof field.value,
+            length: Array.isArray(field.value) ? field.value.length : undefined,
+            sample: Array.isArray(field.value) && field.value.length > 0 ? field.value[0] : field.value
+          });
+        }
+      });
+      
       // Kintone形式からアプリ形式に変換
       
       const kintoneRecord: KintoneRecord = {
@@ -65,6 +89,7 @@ export const kintoneFetchTool = createTool({
         },
         purchases: record.買取情報?.value?.map((row: any) => ({
           会社名_第三債務者_買取: row.value.会社名_第三債務者_買取?.value || "",
+          総債権額: Number(row.value.総債権額?.value || 0),
           買取債権額: Number(row.value.買取債権額?.value || 0),
           買取額: Number(row.value.買取額?.value || 0),
           掛目: row.value.掛目?.value || "",
@@ -79,6 +104,7 @@ export const kintoneFetchTool = createTool({
           過去の入金_先月: Number(row.value.過去の入金_先月?.value || 0),
           過去の入金_今月: Number(row.value.過去の入金_今月?.value || 0),
           平均: Number(row.value.平均?.value || 0),
+          備考: row.value.備考?.value || row.value.備考_担保?.value || "",
         })) || [],
         registries: (record.謄本情報_営業?.value || record.謄本情報?.value)?.map((row: any) => ({
           会社名_第三債務者_0: row.value.会社名_第三債務者_0?.value || "",
@@ -97,24 +123,48 @@ export const kintoneFetchTool = createTool({
           留意事項_審査: record.留意事項_審査?.value || "",
         },
         attachments: {
-          買取情報_成因証書_謄本類_名刺等_添付ファイル: record.買取情報_成因証書_謄本類_名刺等_添付ファイル?.value || [],
-          通帳_メイン_添付ファイル: record.通帳_メイン_添付ファイル?.value || [],
-          通帳_その他_添付ファイル: record.通帳_その他_添付ファイル?.value || [],
-          顧客情報_添付ファイル: record.顧客情報_添付ファイル?.value || [],
-          他社資料_添付ファイル: record.他社資料_添付ファイル?.value || [],
-          担保情報_成因証書_謄本類_名刺等_添付ファイル: record.担保情報_成因証書_謄本類_名刺等_添付ファイル?.value || [],
-          その他_添付ファイル: record.その他_添付ファイル?.value || [],
+          買取情報_成因証書_謄本類_名刺等_添付ファイル: record.成因証書＿添付ファイル?.value || [],
+          通帳_メイン_添付ファイル: record.メイン通帳＿添付ファイル?.value || [],
+          通帳_その他_添付ファイル: record.その他通帳＿添付ファイル?.value || [],
+          顧客情報_添付ファイル: record.顧客情報＿添付ファイル?.value || [],
+          他社資料_添付ファイル: record.他社資料＿添付ファイル?.value || [],
+          担保情報_成因証書_謄本類_名刺等_添付ファイル: record.担保情報＿添付ファイル?.value || [],
+          その他_添付ファイル: record.その他＿添付ファイル?.value || [],
         },
       };
       
-      // 添付ファイル収集は無効化（無限ループ防止）
-      console.log(`[KintoneFetch] attachment collection disabled`);
+      // 添付ファイルのfileKeyを収集
+      const fileKeys: any[] = [];
+      Object.entries(kintoneRecord.attachments).forEach(([category, files]) => {
+        if (Array.isArray(files) && files.length > 0) {
+          files.forEach((file: any) => {
+            fileKeys.push({
+              fileKey: file.fileKey,
+              name: file.name,
+              contentType: file.contentType,
+              size: file.size,
+              category: category
+            });
+          });
+        }
+      });
+      
+      console.log(`[KintoneFetch] Found ${fileKeys.length} files`);
+      
+      // 合計値の追加
+      const purchaseSummary = {
+        買取債権額_合計: Number(record.買取債権額_合計?.value || 0) || 
+          kintoneRecord.purchases.reduce((sum: number, p: any) => sum + p.買取債権額, 0),
+        買取額_合計: Number(record.買取額_合計?.value || 0) ||
+          kintoneRecord.purchases.reduce((sum: number, p: any) => sum + p.買取額, 0),
+      };
       
       return {
         success: true,
         record: kintoneRecord,
-        fileKeys: [],
-        message: `レコードID: ${recordId} を取得しました（添付ファイル収集は無効化）`,
+        purchaseSummary,
+        fileKeys,
+        message: `レコードID: ${recordId} を取得しました（ファイル: ${fileKeys.length}件）`,
       };
       
     } catch (error) {

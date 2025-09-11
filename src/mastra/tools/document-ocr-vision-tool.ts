@@ -6,7 +6,7 @@ import { generateObject } from "ai";
 // GPT-4o Vision対応のOCRツール
 export const documentOcrVisionTool = createTool({
   id: "document-ocr-vision",
-  description: "GPT-4o miniを使用して画像・PDFファイルからテキスト情報を抽出",
+  description: "GPT-4oを使用して画像・PDFファイルからテキスト情報を抽出（高精度版）",
   inputSchema: z.object({
     files: z.array(z.object({
       name: z.string(),
@@ -96,15 +96,15 @@ export const documentOcrVisionTool = createTool({
     
     for (const file of supportedFiles) {
       try {
-        console.log(`GPT-4o mini OCR処理中: ${file.name}`);
+        console.log(`GPT-4o OCR処理中: ${file.name}`);
         
         const category = file.category || getCategoryFromFileName(file.name);
         const schema = getSchemaForCategory(category);
         const prompt = getPromptForCategory(category);
         
-        // GPT-4o miniを使用してOCR処理
+        // GPT-4oを使用してOCR処理（高精度版）
         const result = await generateObject({
-          model: openai("gpt-4o-mini"),
+          model: openai("gpt-4o"),
           messages: [
             {
               role: "user",
@@ -128,7 +128,7 @@ export const documentOcrVisionTool = createTool({
           fileName: file.name,
           category: category,
           extractedData: result.object,
-          confidence: 90 // GPT-4o miniの場合は固定値
+          confidence: 95 // GPT-4oの場合は高精度
         });
         
       } catch (error) {
@@ -152,7 +152,7 @@ export const documentOcrVisionTool = createTool({
         skippedFiles: skippedFiles
       },
       ocrResults: ocrResults,
-      summary: `${ocrResults.length}個のファイルをGPT-4o miniで処理しました。`
+      summary: `${ocrResults.length}個のファイルをGPT-4oで処理しました。`
     };
   },
 });
