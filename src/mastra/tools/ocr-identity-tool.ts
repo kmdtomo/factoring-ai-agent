@@ -1,10 +1,10 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
-import { generateText } from "ai";
+import { generateObject } from "ai";
 import axios from "axios";
 
-// 本人確認書類専用OCRツール
+// 本人確認書類専用OCRツール（シンプル版）
 export const ocrIdentityTool = createTool({
   id: "ocr-identity",
   description: "運転免許証などの本人確認書類をOCR処理し、申込者情報と照合",
@@ -28,7 +28,6 @@ export const ocrIdentityTool = createTool({
       licenseColor: z.enum(["gold", "blue", "green", "unknown"]),
       expiryDate: z.string().optional(),
       violations: z.number().optional().describe("違反回数"),
-      licenseNumber: z.string().optional(),
     }),
     processedFiles: z.array(z.string()),
     summary: z.string(),

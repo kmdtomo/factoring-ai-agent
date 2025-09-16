@@ -1,7 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
-import { generateText } from "ai";
+import { generateObject } from "ai";
 import axios from "axios";
 
 // 登記簿専用OCRツール
@@ -136,7 +136,7 @@ ${targetCompanies.map(c => `- ${c.name}`).join('\n')}`;
           ? `data:application/pdf;base64,${base64Content}`
           : `data:${file.contentType};base64,${base64Content}`;
         
-        const response = await generateText({
+        const response = await generateObject({
           model: openai("gpt-4o"),
           messages: [
             {
@@ -147,6 +147,18 @@ ${targetCompanies.map(c => `- ${c.name}`).join('\n')}`;
               ]
             }
           ],
+          schema: z.object({
+            companyName: z.string().optional().describe("読み取った会社名"),
+            establishedYear: z.string().optional().describe("設立年または成立日"),
+            capital: z.string().optional().describe("資本金"),
+            representatives: z.array(z.string()).optional().describe("代表者名"),
+            hasDebtTransferRegistration: z.boolean().optional().describe("債権譲渡登記の有無"),
+            registrationDetails: z.string().optional().describe("登記の詳細"),
+            documentType: z.string().optional().describe("書類の種類"),
+            confidence: z.number().min(0).max(100).optional().describe("読み取り信頼度"),
+          }),
+          mode: "json",
+          temperature: 0,
         });
         
         const text = response.text;

@@ -14,6 +14,8 @@ export { paymentAnalysisV2Tool } from './payment-analysis-v2-tool';
 export { ocrPurchaseInfoTool } from './ocr-purchase-info-tool';
 export { ocrBankStatementTool } from './ocr-bank-statement-tool';
 export { ocrIdentityTool } from './ocr-identity-tool';
+export { ocrIdentityToolV2 } from './ocr-identity-tool-v2';
 export { ocrRegistryTool } from './ocr-registry-tool';
+export { ocrRegistryToolV2 } from './ocr-registry-tool-v2';
 export { ocrCollateralTool } from './ocr-collateral-tool';
 export { purchaseDataPrepTool } from './purchase-data-prep-tool';
