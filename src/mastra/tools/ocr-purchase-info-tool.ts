@@ -1,7 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
-import { generateText } from "ai";
+import { generateObject } from "ai";
 import axios from "axios";
 
 // 買取情報書類（請求書・発注書）専用OCRツール
@@ -88,24 +88,26 @@ export const ocrPurchaseInfoTool = createTool({
       let invoiceNumber = undefined;
       let paymentDueDate = undefined;
       
-      // 請求書・発注書のみを処理（PDFファイルを優先）
-      let invoiceFiles = purchaseFiles.filter((f: any) => 
-        f.contentType === 'application/pdf' && 
-        (f.name.includes('請求書') || f.name.includes('発注書'))
+      // ファイル選定ロジック（汎用化）
+      // 1) 名前で請求書/発注書を優先（PDF→画像の順）
+      const byName = purchaseFiles.filter((f: any) =>
+        (f.name || '').includes('請求書') || (f.name || '').includes('発注書')
       );
+      const byNamePdf = byName.filter((f: any) => f.contentType === 'application/pdf');
+      const byNameImage = byName.filter((f: any) => (f.contentType || '').startsWith('image/'));
       
-      console.log(`[OCR Purchase Info] Found ${invoiceFiles.length} PDF invoice files`);
+      // 2) 何も見つからなければ、全PDF/画像を対象
+      const allPdf = purchaseFiles.filter((f: any) => f.contentType === 'application/pdf');
+      const allImages = purchaseFiles.filter((f: any) => (f.contentType || '').startsWith('image/'));
       
+      let invoiceFiles = [...byNamePdf, ...byNameImage];
       if (invoiceFiles.length === 0) {
-        // PDFファイルがない場合、全てのファイルから処理
-        console.log(`[OCR Purchase Info] No PDF invoice files found, checking all files`);
-        invoiceFiles = purchaseFiles.filter((f: any) => 
-          f.name.includes('請求書') || f.name.includes('発注書')
-        );
-        console.log(`[OCR Purchase Info] Found ${invoiceFiles.length} total invoice files`);
+        invoiceFiles = [...allPdf, ...allImages];
       }
       
-      for (const file of invoiceFiles.slice(0, 1)) { // 最初の1ファイルのみ処理
+      console.log(`[OCR Purchase Info] Candidate files: ${invoiceFiles.length}`);
+      
+      for (const file of invoiceFiles.slice(0, 3)) { // 最大3ファイルまで処理（汎用化とコスト配慮）
         console.log(`[OCR Purchase Info] Processing: ${file.name}`);
         
         // ファイルをダウンロード
@@ -117,18 +119,22 @@ export const ocrPurchaseInfoTool = createTool({
         
         const base64Content = Buffer.from(fileResponse.data).toString('base64');
         
-        // GPT-4oで照合処理（シンプルなYes/No形式）
-        const prompt = `請求書を確認し、以下の3つの質問に答えてください。
+        // JSONスキーマで厳格に照合＋任意項目抽出
+        const prompt = `PDF/画像の全ページを確認し、以下を判断・抽出してください。
 
-1. この請求書に「${purchaseData.totalDebtAmount.toLocaleString()}円」という金額が記載されていますか？
-2. この請求書の宛先（〇〇御中の部分）に「${purchaseData.debtorCompany}」と書かれていますか？
-3. この請求書の発行者（会社名/ロゴ）は「${applicantCompany}」ですか？
+必須の判定:
+1) 金額: 書類のどこかに「${purchaseData.totalDebtAmount.toLocaleString()}円」と明記があるか。
+2) 宛先: 宛先（〇〇御中 等）に「${purchaseData.debtorCompany}」が記載されているか。
+3) 発行者: 発行元（会社名/ロゴ）が「${applicantCompany}」であるか。
 
-各質問に対して「はい」または「いいえ」で回答してください。
-必ず以下の形式で回答してください：
-1. はい（またはいいえ）
-2. はい（またはいいえ）
-3. はい（またはいいえ）`;
+任意の抽出（見つかる場合のみ）:
+- 請求書番号（invoiceNumber）: 原文そのまま。
+- 支払期日（paymentDueDate）: YYYY-MM-DD 形式が望ましいが、原文のままでも可。
+
+ルール:
+- 見えない/判別不能な場合は unknown を返す（false ではない）。
+- 推測や補完は禁止。画面で確認できる根拠があるもののみ。
+- 出力は指定JSONのみ。説明文や断り書きは禁止。`;
         
         // PDFファイルの場合はデータURLとして送信
         const isPDF = file.contentType === 'application/pdf';
@@ -136,81 +142,71 @@ export const ocrPurchaseInfoTool = createTool({
           ? `data:application/pdf;base64,${base64Content}`
           : `data:${file.contentType};base64,${base64Content}`;
         
-        const response = await generateText({
+        const result = await generateObject({
           model: openai("gpt-4o"),
           messages: [
             {
               role: "user",
               content: [
                 { type: "text", text: prompt },
-                { 
-                  type: "image", 
-                  image: dataUrl  // PDFもimageタイプとして送信（データURL形式）
-                }
+                { type: "image", image: dataUrl }
               ]
             }
           ],
+          schema: z.object({
+            q1_amount_present: z.enum(["match","mismatch","unknown"]),
+            q2_addressee_present: z.enum(["match","mismatch","unknown"]),
+            q3_issuer_present: z.enum(["match","mismatch","unknown"]),
+            invoiceNumber: z.string().optional(),
+            paymentDueDate: z.string().optional(),
+            notes: z.string().optional()
+          }),
+          mode: "json",
+          temperature: 0,
         });
-        
-        // レスポンスを解析
-        const text = response.text;
-        console.log(`[OCR Purchase Info] GPT-4o response:`, text);
-        
-        // シンプルなパターンマッチング
-        // 「1. はい」「2. いいえ」などの形式を探す
-        const answer1Match = text.match(/1\.\s*(はい|いいえ)/i);
-        const answer2Match = text.match(/2\.\s*(はい|いいえ)/i);
-        const answer3Match = text.match(/3\.\s*(はい|いいえ)/i);
-        
-        console.log(`[OCR Purchase Info] Parsed answers:`, {
-          answer1: answer1Match?.[1],
-          answer2: answer2Match?.[1],
-          answer3: answer3Match?.[1]
-        });
-        
-        // 1. 請求金額の判定
-        if (answer1Match) {
-          if (answer1Match[1] === 'はい') {
-            foundAmount = purchaseData.totalDebtAmount;
-            amountMatch = "match";
-            console.log(`[OCR Purchase Info] Amount matches: ${foundAmount}`);
-          } else {
-            amountMatch = "mismatch";
-            console.log(`[OCR Purchase Info] Amount does not match`);
-          }
+
+        // 判定値に変換
+        const q1 = result.object.q1_amount_present;
+        const q2 = result.object.q2_addressee_present;
+        const q3 = result.object.q3_issuer_present;
+        const notes = result.object.notes || "";
+
+        // グローバル集約（最も強い一致を優先）
+        if (q1 === "match") {
+          foundAmount = foundAmount ?? purchaseData.totalDebtAmount;
+          amountMatch = "match";
+        } else if (q1 === "mismatch" && amountMatch !== "match") {
+          amountMatch = "mismatch";
         }
-        
-        // 2. 請求先の判定
-        if (answer2Match) {
-          if (answer2Match[1] === 'はい') {
-            foundCompany = purchaseData.debtorCompany;
-            companyMatch = "match";
-            console.log(`[OCR Purchase Info] Company matches: ${foundCompany}`);
-          } else {
-            companyMatch = "mismatch";
-            console.log(`[OCR Purchase Info] Company does not match`);
-          }
+
+        if (q2 === "match") {
+          foundCompany = foundCompany ?? purchaseData.debtorCompany;
+          companyMatch = "match";
+        } else if (q2 === "mismatch" && companyMatch !== "match") {
+          companyMatch = "mismatch";
         }
-        
-        // 3. 請求元の判定
-        let applicantMatch = "not_found";
-        if (answer3Match) {
-          applicantMatch = answer3Match[1] === 'はい' ? "match" : "mismatch";
-          console.log(`[OCR Purchase Info] Applicant ${applicantMatch}`);
+
+        const applicantMatch = q3 === "match" ? "match" : q3 === "mismatch" ? "mismatch" : "not_found";
+
+        // 任意抽出（初回のみ採用）
+        if (!invoiceNumber && result.object.invoiceNumber) {
+          invoiceNumber = result.object.invoiceNumber;
+        }
+        if (!paymentDueDate && result.object.paymentDueDate) {
+          paymentDueDate = result.object.paymentDueDate;
         }
         
         // 請求書番号と支払期日も抽出（追加プロンプトで取得する場合）
         // 現在のプロンプトには含まれていないため、必要に応じて後で実装
         
         // より詳細な結果を記録
-        const detailedResult = `照合結果:
-` +
-          `1. 請求金額 ${purchaseData.totalDebtAmount.toLocaleString()}円: ${amountMatch === "match" ? "✓ 一致" : amountMatch === "mismatch" ? "✗ 不一致" : "? 確認不能"}
-` +
-          `2. 請求先 ${purchaseData.debtorCompany}: ${companyMatch === "match" ? "✓ 一致" : companyMatch === "mismatch" ? "✗ 不一致" : "? 確認不能"}
-` +
-          `3. 請求元 ${applicantCompany}: ${applicantMatch === "match" ? "✓ 一致" : applicantMatch === "mismatch" ? "✗ 不一致" : "? 確認不能"}\n\n` +
-          `GPT応答: ${text}`;
+        const detailedResult = `照合結果\n` +
+          `1. 請求金額 ${purchaseData.totalDebtAmount.toLocaleString()}円: ${amountMatch === "match" ? "✓ 一致" : amountMatch === "mismatch" ? "✗ 不一致" : "? 確認不能"}\n` +
+          `2. 請求先 ${purchaseData.debtorCompany}: ${companyMatch === "match" ? "✓ 一致" : companyMatch === "mismatch" ? "✗ 不一致" : "? 確認不能"}\n` +
+          `3. 請求元 ${applicantCompany}: ${applicantMatch === "match" ? "✓ 一致" : applicantMatch === "mismatch" ? "✗ 不一致" : "? 確認不能"}` +
+          (invoiceNumber ? `\n請求書番号: ${invoiceNumber}` : "") +
+          (paymentDueDate ? `\n支払期日: ${paymentDueDate}` : "") +
+          (notes ? `\n備考: ${notes}` : "");
         
         processedFiles.push({
           fileName: file.name,
@@ -223,10 +219,7 @@ export const ocrPurchaseInfoTool = createTool({
           companyMatch,
           foundCompany,
           applicantMatch,
-          answer1: answer1Match?.[1],
-          answer2: answer2Match?.[1],
-          answer3: answer3Match?.[1],
-          rawResponse: text
+          rawResponse: JSON.stringify(result.object)
         });
       }
       
