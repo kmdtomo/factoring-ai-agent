@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { generateObject } from "ai";
 import axios from "axios";
 
@@ -128,7 +128,7 @@ export const ocrPurchaseSimpleTool = createTool({
       console.log(`📄 ファイル形式: ${filesToProcess[0]?.contentType}`);
       
       const result = await generateObject({
-        model: openai("gpt-4o"),
+        model: anthropic("claude-3-5-sonnet-20241022") as any,
         messages: [
           {
             role: "user",

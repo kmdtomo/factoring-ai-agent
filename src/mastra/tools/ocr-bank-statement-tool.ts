@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { generateObject } from "ai";
 import axios from "axios";
 
@@ -28,7 +28,8 @@ export const ocrBankStatementTool = createTool({
     extractedTransactions: z.array(z.object({
       amount: z.number().describe("入金額"),
       date: z.string().optional().describe("日付"),
-      description: z.string().optional().describe("摘要"),
+      payerName: z.string().optional().describe("振込元/支払者名"),
+      description: z.string().optional().describe("摘要/その他情報"),
     })).describe("抽出された入金取引一覧"),
     matchResults: z.array(z.object({
       amount: z.number(),
@@ -143,57 +144,72 @@ export const ocrBankStatementTool = createTool({
         processedFiles.push(file.name);
       }
       
-      // 期待値を文字列形式で整理
-      const expectedPaymentsText = Object.entries(expectedPayments)
-        .map(([company, amounts]) => 
-          `${company}: ${amounts.map(a => a.toLocaleString()).join('円, ')}円`
-        ).join('\n');
-      
-      // 統合モード: マーク検出+適応的抽出
-      const prompt = `この通帳画像（${filesToProcess.length}ファイル）を分析してください：
+      // 第1段階: 純粋なOCR（期待値なし）
+      const ocrPrompt = `この通帳画像（${filesToProcess.length}ファイル）を分析してください：
 
-🔍 【ステップ1: マーク検出】
-視覚的マーク（蛍光ペン、ハイライト、色付け、赤丸、矢印等）の有無を判定してください。
-マークがある場合は、その数も正確にカウントしてください。
+🔍 【ステップ1: マーク検出 - 最重要】
+**取引行に付けられた強調マーク**を検出してください：
+- 蛍光ペンでハイライトされた取引行
+- 丸印（赤丸、青丸など）で囲まれた取引
+- 下線や波線が引かれた取引
+- 矢印で指し示された取引
+- チェックマークが付いた取引
 
-📊 【ステップ2: 抽出モード選択と実行】
+⚠️ 重要な区別: 
+- ✅ 対象: 取引金額や日付を強調するマーク
+- ❌ 対象外: 手書きのメモ、コメント、説明文
+- ❌ 対象外: 取引と無関係な赤い文字や印
+
+💡 判断基準:
+- マークは「どの取引を見るべきか」を示すものです
+- 手書きメモは内容の説明であり、マークではありません
+
+🔎 スキャン方法:
+- 通帳の最初のページから最後のページまで全て確認してください
+- 特に最初の数ページは見逃しやすいので、入念にチェック
+- 各ページの上部・中部・下部を漏れなく確認
+
+📊 【ステップ2: 取引情報の抽出】
+
+⚠️ 絶対的ルール:
+- 画像に実際に記載されている内容のみを抽出
+- 架空の企業名や金額を創作しない
+- 読み取れない部分は無理に埋めない
 
 ◆ マークありモード（マークを検出した場合）:
-  🔴 マークされた入金を「全て漏れなく」抽出してください
-  ⚠️ 重要: 
-  - マークされた箇所は全て重要です。1つも見逃さないでください
-  - 期待値の数に関係なく、マークされた全ての入金を抽出してください
-  - 例: 期待値が3つでも、マークが5つあれば5つ全て抽出
+  🔴 マークされた箇所の情報を全てそのまま抽出
+  - マークされた行にある全ての情報（入金・出金問わず）を読み取る
+  - 日付、金額（プラス/マイナス）、振込元/振込先名、摘要など
+  - マークされた全ての取引を漏れなく報告
 
-◆ マークなしモード（マークがない場合のみ）:
-  以下の期待値と完全一致する金額を探索してください：
-  ${expectedPaymentsText}
-  
-  ⚠️ 重要: 
-  - 通帳内の全ての入金取引を確認してください
-  - カンマ区切りの数字も正確に読み取ってください（例: 1,099,725円）
-  - 期待値と完全一致する金額のみを抽出してください
+◆ 全体スキャンモード（マークがない場合）:
+  通帳内の主要な入金取引を抽出
+  - 大きな金額の入金を中心に抽出
+  - 日付、金額、振込元名を正確に読み取る
 
-📋 【ステップ3: 抽出詳細】
-各取引について以下を抽出：
-- 入金額（整数）⚠️ 数字を正確に読み取ってください（8/3、9/0、6/5の混同に注意）
-- 日付（可能な場合）
-- 摘要・振込元（可能な場合）
+📋 【抽出する情報】
+各取引について：
+- 金額: 通帳に記載の金額を正確に（入金はプラス、出金はマイナス）
+- 日付: 記載されている日付
+- 振込元名（payerName）: 通帳に実際に印字されている企業名・個人名
+- 摘要: その他の付加情報があれば
 
-🎯 【ステップ4: 照合（抽出後）】
-抽出した金額と期待値の完全一致を判定してください。
+🚫 【禁止事項】
+- 存在しない企業名を創作しない
+- 不明瞭な部分を推測で埋めない
+- 画像にない情報を追加しない
 
-出力: 指定されたJSONスキーマに従って構造化データを提供してください。`;
+出力: 実際に通帳から読み取れた情報のみを提供してください。`;
       
       const content = [
-        { type: "text" as const, text: prompt },
+        { type: "text" as const, text: ocrPrompt },
         ...fileContents.map(f => ({ type: "image" as const, image: f.dataUrl }))
       ];
       
       let result;
       try {
         result = await generateObject({
-          model: openai("gpt-4o"),
+          model: anthropic("claude-3-7-sonnet-20250219") as any,
           messages: [{ role: "user", content }],
           schema: z.object({
             markDetection: z.object({
@@ -204,13 +220,14 @@ export const ocrBankStatementTool = createTool({
             extractedTransactions: z.array(z.object({
               amount: z.number().describe("入金額"),
               date: z.string().optional().describe("日付"),
-              description: z.string().optional().describe("摘要"),
+              payerName: z.string().optional().describe("振込元/支払者名"),
+              description: z.string().optional().describe("摘要/その他情報"),
             })),
             matchResults: z.array(z.object({
               amount: z.number(),
               matched: z.string().optional().describe("一致した企業と期間"),
               status: z.enum(["exact", "none"]).describe("照合結果"),
-            })),
+            })).optional(),
             confidence: z.number().min(0).max(100).optional().describe("読み取り信頼度"),
           }),
           mode: "json",
@@ -234,14 +251,32 @@ export const ocrBankStatementTool = createTool({
 
       const extractedTransactions = result.object.extractedTransactions || [];
       const markDetection = result.object.markDetection;
-      const matchResults = result.object.matchResults || [];
       
       console.log(`[OCR Bank Statement] バッチ処理完了: ${extractedTransactions.length}件の取引を${processedFiles.length}ファイルから抽出`);
       console.log(`[OCR Bank Statement] マーク検出結果:`, markDetection);
-      console.log(`[OCR Bank Statement] 照合結果:`, matchResults);
+      
+      // 第2段階: 期待値との照合（検索モードの場合のみ）
+      let matchResults: any[] = [];
+      if (markDetection.extractionMode === "search" || !markDetection.hasMarks) {
+        // 期待値と抽出結果を照合
+        const allExpectedAmounts = Object.entries(expectedPayments).flatMap(([company, amounts]) => 
+          amounts.map(amount => ({ company, amount }))
+        );
+        
+        matchResults = extractedTransactions.map(transaction => {
+          const match = allExpectedAmounts.find(exp => exp.amount === transaction.amount);
+          return {
+            amount: transaction.amount,
+            matched: match ? `${match.company}` : undefined,
+            status: match ? "exact" : "none"
+          };
+        });
+        
+        console.log(`[OCR Bank Statement] 照合結果:`, matchResults);
+      }
       
       // 要約を作成
-      const summary = `通帳OCR完了（${processedFiles.length}ファイル処理）、${markDetection.extractionMode === "marked" ? "マーク" : "期待値"}モードで${extractedTransactions.length}件抽出、${matchResults.filter(m => m.status === "exact").length}件完全一致`;
+      const summary = `通帳OCR完了（${processedFiles.length}ファイル処理）、${markDetection.extractionMode === "marked" ? "マーク" : "期待値"}モードで${extractedTransactions.length}件抽出`; // 、${matchResults.filter(m => m.status === "exact").length}件完全一致`;
 
       return {
         success: true,

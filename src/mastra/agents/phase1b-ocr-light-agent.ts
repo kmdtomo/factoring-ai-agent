@@ -1,5 +1,5 @@
 import { Agent } from "@mastra/core/agent";
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { 
   ocrIdentityToolV2,
   ocrRegistryToolV2,
@@ -9,7 +9,7 @@ import {
 export const phase1bOcrLightAgent = new Agent({
   name: "phase1b-ocr-light-agent",
   description: "軽量OCR処理専門エージェント - 本人確認書類、登記簿の軽量書類処理",
-  model: openai("gpt-4o"), // 安定した処理のため
+  model: anthropic("claude-3-7-sonnet-20250219"), // 日本語OCRに最適
   
   tools: {
     ocrIdentityToolV2,
