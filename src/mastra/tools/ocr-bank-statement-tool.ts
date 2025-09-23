@@ -4,45 +4,44 @@ import { openai } from "@ai-sdk/openai";
 import { generateObject } from "ai";
 import axios from "axios";
 
-// 通帳OCRツール - データ抽出と担保情報との照合
+// 通帳OCRツール - 統合モード（期待値表示→抽出→照合）
 export const ocrBankStatementTool = createTool({
-  id: "ocr-bank-statement",
-  description: "通帳をOCR処理してマークされた入金を抽出し、担保情報と照合",
+  id: "ocr-bank-statement", 
+  description: "メイン通帳専用OCR。マーク検出→適応的抽出→期待値照合。法人口座の入金額照合に特化",
   inputSchema: z.object({
-    recordId: z.string().describe("KintoneレコードID"),
-    isMainAccount: z.boolean().default(true).describe("メイン通帳かどうか"),
-    collateralInfo: z.array(z.object({
-      companyName: z.string().describe("担保企業名"),
-      pastPayments: z.object({
-        threeMonthsAgo: z.number().describe("前前々月の入金"),
-        twoMonthsAgo: z.number().describe("前々月の入金"),
-        lastMonth: z.number().describe("前月の入金"),
-      }).describe("過去3ヶ月の入金実績"),
-    })).optional().describe("担保情報（照合用）"),
+    recordId: z.string().describe("KintoneレコードID（メイン通帳＿添付ファイル+担保情報テーブルを自動取得）"),
   }),
   outputSchema: z.object({
     success: z.boolean(),
-    markedTransactions: z.array(z.object({
+    processingDetails: z.object({
+      recordId: z.string(),
+      filesFound: z.number(),
+      collateralEntriesFound: z.number(),
+      expectedCompanies: z.array(z.string()),
+    }),
+    markDetection: z.object({
+      hasMarks: z.boolean().describe("視覚的マークの有無"),
+      markCount: z.number().optional().describe("検出されたマークの数"),
+      extractionMode: z.enum(["marked", "search"]).describe("抽出モード"),
+    }),
+    expectedPayments: z.object({}).passthrough().describe("期待される入金額（会社別・月別）"),
+    extractedTransactions: z.array(z.object({
       amount: z.number().describe("入金額"),
       date: z.string().optional().describe("日付"),
       description: z.string().optional().describe("摘要"),
-    })).describe("マークされた入金取引一覧"),
-    extractedAmounts: z.string().describe("抽出された金額の要約"),
-    matchingResults: z.object({
-      summary: z.string().describe("照合結果の要約"),
-      matches: z.array(z.object({
-        amount: z.number(),
-        matchedWith: z.string().optional().describe("一致した担保情報"),
-        matchType: z.enum(["exact", "split", "partial", "none"]).describe("一致タイプ"),
-      })).optional(),
-    }).optional().describe("担保情報との照合結果"),
-    rawOCRResponse: z.string().describe("OCRの生レスポンス"),
+    })).describe("抽出された入金取引一覧"),
+    matchResults: z.array(z.object({
+      amount: z.number(),
+      matched: z.string().optional().describe("一致した企業と期間"),
+      status: z.enum(["exact", "none"]).describe("照合結果"),
+    })),
+    summary: z.string().describe("処理結果の要約"),
     fileProcessed: z.string().optional().describe("処理したファイル名"),
     error: z.string().optional(),
   }),
   
   execute: async ({ context }) => {
-    const { recordId, isMainAccount, collateralInfo } = context;
+    const { recordId } = context;
     const domain = process.env.KINTONE_DOMAIN;
     const apiToken = process.env.KINTONE_API_TOKEN;
     
@@ -62,28 +61,68 @@ export const ocrBankStatementTool = createTool({
       }
       
       const record = recordResponse.data.records[0];
-      const bankFiles = isMainAccount ? 
-        record.メイン通帳＿添付ファイル?.value || [] :
-        record.その他通帳＿添付ファイル?.value || [];
+      const bankFiles = record.メイン通帳＿添付ファイル?.value || [];
       
       if (bankFiles.length === 0) {
         return {
           success: false,
-          markedTransactions: [],
-          extractedAmounts: "通帳が添付されていません",
-          rawOCRResponse: "",
-          error: `${isMainAccount ? "メイン" : "その他"}通帳が添付されていません`,
+          processingDetails: {
+            recordId,
+            filesFound: 0,
+            collateralEntriesFound: 0,
+            expectedCompanies: [],
+          },
+          markDetection: {
+            hasMarks: false,
+            markCount: 0,
+            extractionMode: "search" as const,
+          },
+          expectedPayments: {},
+          extractedTransactions: [],
+          matchResults: [],
+          summary: "メイン通帳が添付されていません",
+          error: "メイン通帳が添付されていません",
         };
       }
       
       console.log(`[OCR Bank Statement] Candidate files: ${bankFiles.length}`);
       
-      let allMarkedTransactions: Array<{amount: number; date?: string; description?: string}> = [];
+      // 担保情報テーブルを先に取得して期待値を構築
+      console.log(`[OCR Bank Statement] 担保情報テーブルを取得中...`);
+      const collateralInfoRaw = record.担保情報?.value || [];
+      console.log(`[OCR Bank Statement] 担保情報: ${collateralInfoRaw.length}件`);
+      
+      // 期待値を構築
+      const expectedPayments: Record<string, number[]> = {};
+      const expectedCompanies: string[] = [];
+      
+      collateralInfoRaw.forEach((item: any) => {
+        const company = item.value?.会社名_第三債務者_担保?.value || "";
+        if (company) {
+          expectedCompanies.push(company);
+          const payments = [
+            parseInt(item.value?.過去の入金_先々月?.value || "0"),
+            parseInt(item.value?.過去の入金_先月?.value || "0"), 
+            parseInt(item.value?.過去の入金_今月?.value || "0")
+          ].filter(p => p > 0); // 0円は除外
+          
+          if (payments.length > 0) {
+            expectedPayments[company] = payments;
+          }
+        }
+      });
+      
+      console.log(`[OCR Bank Statement] 期待値構築完了:`, expectedPayments);
+      
+      // バッチ処理: 全ファイルを1回のAPI呼び出しで処理
+      const filesToProcess = bankFiles.slice(0, 3);
+      console.log(`[OCR Bank Statement] Batch processing ${filesToProcess.length} files`);
+      
+      const fileContents: Array<{dataUrl: string}> = [];
       const processedFiles: string[] = [];
       
-      // 最大3ファイルまで処理（purchaseと同じ方式）
-      for (const file of bankFiles.slice(0, 3)) {
-        console.log(`[OCR Bank Statement] Processing: ${file.name}`);
+      for (const file of filesToProcess) {
+        console.log(`[OCR Bank Statement] Downloading: ${file.name}`);
         
         // ファイルをダウンロード
         const downloadUrl = `https://${domain}/k/v1/file.json?fileKey=${file.fileKey}`;
@@ -93,161 +132,130 @@ export const ocrBankStatementTool = createTool({
         });
         
         const base64Content = Buffer.from(fileResponse.data).toString('base64');
-        
-        // 技術的な分析プロンプト（安全性フィルター回避）
-        const prompt = `この文書の視覚的にマークされた項目を分析してください。
-ハイライト、マーカー、色付けされた部分を特定し、以下の形式で構造化してください：
-
-分析対象:
-- 色付きマーカーで強調された数値データ
-- 関連する日付情報
-- 対応する説明テキスト
-
-技術要件:
-- 数値は整数形式で記録
-- 日付は文字列形式（可能な場合）
-- 説明は原文テキスト（可能な場合）
-- 不明確な項目は省略
-
-出力: 指定されたJSONスキーマに従って構造化データを提供してください。`;
-        
-        // データURL形式で送信
         const isPDF = file.contentType === 'application/pdf';
         const dataUrl = isPDF 
           ? `data:application/pdf;base64,${base64Content}`
           : `data:${file.contentType};base64,${base64Content}`;
         
-        let result;
-        try {
-          result = await generateObject({
-            model: openai("gpt-4o"),
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: prompt },
-                  { type: "image", image: dataUrl }
-                ]
-              }
-            ],
-            schema: z.object({
-              transactions: z.array(z.object({
-                amount: z.number(),
-                date: z.string().optional(),
-                description: z.string().optional()
-              })).default([]),
-              notes: z.string().optional()
-            }),
-            mode: "json",
-            temperature: 0,
-          });
-        } catch (error) {
-          console.error(`[OCR Bank Statement] OpenAI拒否エラー (${file.name}):`, error);
-          // OpenAIが拒否した場合は空の結果を返す
-          result = {
-            object: {
-              transactions: [],
-              notes: "OpenAIの安全性フィルターにより処理できませんでした"
-            }
-          };
-        }
-
-        const fileTransactions = result.object.transactions || [];
-        allMarkedTransactions.push(...fileTransactions);
+        fileContents.push({
+          dataUrl
+        });
         processedFiles.push(file.name);
-        
-        console.log(`[OCR Bank Statement] File ${file.name}: Found ${fileTransactions.length} transactions`);
       }
       
-      console.log(`[OCR Bank Statement] Total marked transactions: ${allMarkedTransactions.length} from ${processedFiles.length} files`);
+      // 期待値を文字列形式で整理
+      const expectedPaymentsText = Object.entries(expectedPayments)
+        .map(([company, amounts]) => 
+          `${company}: ${amounts.map(a => a.toLocaleString()).join('円, ')}円`
+        ).join('\n');
       
-      // 抽出された金額の要約を作成
-      const extractedAmounts = allMarkedTransactions.length > 0 ?
-        `マークされた入金${allMarkedTransactions.length}件（${processedFiles.length}ファイル処理）：` + 
-        allMarkedTransactions.map((t, i) => 
-          `\n${i + 1}. ${t.amount.toLocaleString()}円 (${t.date || '日付不明'})${t.description ? ` - ${t.description}` : ''}`
-        ).join('') :
-        'マークされた入金は見つかりませんでした';
+      // 統合モード: マーク検出+適応的抽出
+      const prompt = `この通帳画像（${filesToProcess.length}ファイル）を分析してください：
+
+🔍 【ステップ1: マーク検出】
+視覚的マーク（蛍光ペン、ハイライト、色付け、赤丸、矢印等）の有無を判定してください。
+マークがある場合は、その数も正確にカウントしてください。
+
+📊 【ステップ2: 抽出モード選択と実行】
+
+◆ マークありモード（マークを検出した場合）:
+  🔴 マークされた入金を「全て漏れなく」抽出してください
+  ⚠️ 重要: 
+  - マークされた箇所は全て重要です。1つも見逃さないでください
+  - 期待値の数に関係なく、マークされた全ての入金を抽出してください
+  - 例: 期待値が3つでも、マークが5つあれば5つ全て抽出
+
+◆ マークなしモード（マークがない場合のみ）:
+  以下の期待値と完全一致する金額を探索してください：
+  ${expectedPaymentsText}
+  
+  ⚠️ 重要: 
+  - 通帳内の全ての入金取引を確認してください
+  - カンマ区切りの数字も正確に読み取ってください（例: 1,099,725円）
+  - 期待値と完全一致する金額のみを抽出してください
+
+📋 【ステップ3: 抽出詳細】
+各取引について以下を抽出：
+- 入金額（整数）⚠️ 数字を正確に読み取ってください（8/3、9/0、6/5の混同に注意）
+- 日付（可能な場合）
+- 摘要・振込元（可能な場合）
+
+🎯 【ステップ4: 照合（抽出後）】
+抽出した金額と期待値の完全一致を判定してください。
+
+出力: 指定されたJSONスキーマに従って構造化データを提供してください。`;
       
-      // 担保情報との照合を実施
-      let matchingResults = undefined;
-      if (collateralInfo && collateralInfo.length > 0) {
-        const matches: Array<{amount: number; matchedWith?: string; matchType: "exact" | "split" | "partial" | "none"}> = [];
-        const allPastPayments: Array<{company: string; amount: number}> = [];
-        
-        // 全ての過去の入金をフラットなリストに
-        collateralInfo.forEach(company => {
-          if (company.pastPayments.threeMonthsAgo > 0) {
-            allPastPayments.push({ company: company.companyName, amount: company.pastPayments.threeMonthsAgo });
-          }
-          if (company.pastPayments.twoMonthsAgo > 0) {
-            allPastPayments.push({ company: company.companyName, amount: company.pastPayments.twoMonthsAgo });
-          }
-          if (company.pastPayments.lastMonth > 0) {
-            allPastPayments.push({ company: company.companyName, amount: company.pastPayments.lastMonth });
-          }
+      const content = [
+        { type: "text" as const, text: prompt },
+        ...fileContents.map(f => ({ type: "image" as const, image: f.dataUrl }))
+      ];
+      
+      let result;
+      try {
+        result = await generateObject({
+          model: openai("gpt-4o"),
+          messages: [{ role: "user", content }],
+          schema: z.object({
+            markDetection: z.object({
+              hasMarks: z.boolean().describe("視覚的マークの有無"),
+              markCount: z.number().optional().describe("検出されたマークの数"),
+              extractionMode: z.enum(["marked", "search"]).describe("抽出モード"),
+            }),
+            extractedTransactions: z.array(z.object({
+              amount: z.number().describe("入金額"),
+              date: z.string().optional().describe("日付"),
+              description: z.string().optional().describe("摘要"),
+            })),
+            matchResults: z.array(z.object({
+              amount: z.number(),
+              matched: z.string().optional().describe("一致した企業と期間"),
+              status: z.enum(["exact", "none"]).describe("照合結果"),
+            })),
+            confidence: z.number().min(0).max(100).optional().describe("読み取り信頼度"),
+          }),
+          mode: "json",
+          temperature: 0,
         });
-        
-        // 各マーク付き入金を照合
-        for (const transaction of allMarkedTransactions) {
-          // 完全一致を探す
-          const exactMatch = allPastPayments.find(p => p.amount === transaction.amount);
-          if (exactMatch) {
-            matches.push({
-              amount: transaction.amount,
-              matchedWith: `${exactMatch.company}: ${exactMatch.amount.toLocaleString()}円`,
-              matchType: "exact"
-            });
-            continue;
+      } catch (error) {
+        console.error(`[OCR Bank Statement] OpenAI拒否エラー (バッチ処理):`, error);
+        result = {
+          object: {
+            markDetection: {
+              hasMarks: false,
+              markCount: 0,
+              extractionMode: "search" as const
+            },
+            extractedTransactions: [],
+            matchResults: [],
+            confidence: 0
           }
-          
-          // 分割払いの可能性をチェック（2つの合計）
-          let splitFound = false;
-          for (let i = 0; i < allPastPayments.length; i++) {
-            for (let j = i + 1; j < allPastPayments.length; j++) {
-              if (allPastPayments[i].amount + allPastPayments[j].amount === transaction.amount) {
-                matches.push({
-                  amount: transaction.amount,
-                  matchedWith: `${allPastPayments[i].company}(${allPastPayments[i].amount.toLocaleString()}円) + ${allPastPayments[j].company}(${allPastPayments[j].amount.toLocaleString()}円)`,
-                  matchType: "split"
-                });
-                splitFound = true;
-                break;
-              }
-            }
-            if (splitFound) break;
-          }
-          
-          if (!splitFound) {
-            matches.push({
-              amount: transaction.amount,
-              matchType: "none"
-            });
-          }
-        }
-        
-        // 照合結果の要約を作成
-        const exactCount = matches.filter(m => m.matchType === "exact").length;
-        const splitCount = matches.filter(m => m.matchType === "split").length;
-        const noneCount = matches.filter(m => m.matchType === "none").length;
-        
-        let summary = `照合結果: `;
-        if (exactCount > 0) summary += `完全一致${exactCount}件`;
-        if (splitCount > 0) summary += `${exactCount > 0 ? '、' : ''}分割払い可能性${splitCount}件`;
-        if (noneCount > 0) summary += `${(exactCount > 0 || splitCount > 0) ? '、' : ''}不一致${noneCount}件`;
-        
-        matchingResults = {
-          summary,
-          matches
         };
       }
+
+      const extractedTransactions = result.object.extractedTransactions || [];
+      const markDetection = result.object.markDetection;
+      const matchResults = result.object.matchResults || [];
       
+      console.log(`[OCR Bank Statement] バッチ処理完了: ${extractedTransactions.length}件の取引を${processedFiles.length}ファイルから抽出`);
+      console.log(`[OCR Bank Statement] マーク検出結果:`, markDetection);
+      console.log(`[OCR Bank Statement] 照合結果:`, matchResults);
+      
+      // 要約を作成
+      const summary = `通帳OCR完了（${processedFiles.length}ファイル処理）、${markDetection.extractionMode === "marked" ? "マーク" : "期待値"}モードで${extractedTransactions.length}件抽出、${matchResults.filter(m => m.status === "exact").length}件完全一致`;
+
       return {
         success: true,
-        markedTransactions: allMarkedTransactions,
-        extractedAmounts,
-        matchingResults,
-        rawOCRResponse: JSON.stringify({ processedFiles, totalTransactions: allMarkedTransactions.length }),
+        processingDetails: {
+          recordId,
+          filesFound: bankFiles.length,
+          collateralEntriesFound: collateralInfoRaw.length,
+          expectedCompanies,
+        },
+        markDetection,
+        expectedPayments,
+        extractedTransactions,
+        matchResults,
+        summary,
         fileProcessed: processedFiles.join(", "),
       };
       
@@ -255,9 +263,21 @@ export const ocrBankStatementTool = createTool({
       console.error(`[OCR Bank Statement] Error:`, error);
       return {
         success: false,
-        markedTransactions: [],
-        extractedAmounts: "OCR処理に失敗しました",
-        rawOCRResponse: "",
+        processingDetails: {
+          recordId,
+          filesFound: 0,
+          collateralEntriesFound: 0,
+          expectedCompanies: [],
+        },
+        markDetection: {
+          hasMarks: false,
+          markCount: 0,
+          extractionMode: "search" as const,
+        },
+        expectedPayments: {},
+        extractedTransactions: [],
+        matchResults: [],
+        summary: "OCR処理に失敗しました",
         error: error instanceof Error ? error.message : "OCR処理に失敗しました",
       };
     }

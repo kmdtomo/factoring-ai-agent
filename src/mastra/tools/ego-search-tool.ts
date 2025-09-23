@@ -41,17 +41,18 @@ export const egoSearchTool = createTool({
     // 詐欺情報サイトのチェック
     const fraudSites = [
       {
-        name: "yamagatamasakage",
-        url: "https://yamagatamasakage.com/givemebackmoney/",
-        searchUrl: (name: string) => 
-          `https://yamagatamasakage.com/givemebackmoney/?s=${encodeURIComponent(name)}`,
-      },
-      {
         name: "eradicationofblackmoney",
         url: "https://eradicationofblackmoneyscammers.com/",
         searchUrl: (name: string) => 
           `https://eradicationofblackmoneyscammers.com/?s=${encodeURIComponent(name)}`,
       },
+      // 将来的に追加可能な他のサイト
+      // {
+      //   name: "sagiwall-checker",
+      //   url: "https://checker.sagiwall.jp",
+      //   searchUrl: (name: string) => 
+      //     `https://checker.sagiwall.jp/check?q=${encodeURIComponent(name)}`,
+      // },
     ];
     
     // 詐欺サイト検索
@@ -86,6 +87,8 @@ export const egoSearchTool = createTool({
     const negativeQueries = [
       `${name} 詐欺`,
       `${name} 逮捕`,
+      `${name} 容疑`,
+      `${name} 被害`,
     ];
     
     for (const query of negativeQueries) {

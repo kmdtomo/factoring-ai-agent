@@ -11,8 +11,10 @@ export { documentOcrVerificationTool } from './document-ocr-verification-tool';
 export { paymentAnalysisV2Tool } from './payment-analysis-v2-tool';
 
 // v2 個別OCRツール
-export { ocrPurchaseInfoTool } from './ocr-purchase-info-tool';
+export { ocrPurchaseInfoToolFixed as ocrPurchaseInfoTool } from './ocr-purchase-info-tool-fixed';
+export { ocrPurchaseSimpleTool } from './ocr-purchase-simple-tool';
 export { ocrBankStatementTool } from './ocr-bank-statement-tool';
+export { ocrPersonalBankTool } from './ocr-personal-bank-tool';
 export { ocrIdentityTool } from './ocr-identity-tool';
 export { ocrIdentityToolV2 } from './ocr-identity-tool-v2';
 export { ocrRegistryTool } from './ocr-registry-tool';
