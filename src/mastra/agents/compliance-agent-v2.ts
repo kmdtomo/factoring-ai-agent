@@ -3,14 +3,12 @@ import { openai } from "@ai-sdk/openai";
 import { 
   egoSearchTool, 
   companyVerifyTool, 
-  kintoneFetchTool,
   paymentAnalysisV2Tool,
   ocrPurchaseInfoTool,
   ocrBankStatementTool,
   ocrIdentityToolV2,
   ocrRegistryToolV2,
   ocrCollateralTool,
-  purchaseDataPrepTool,
 } from "../tools";
 
 // ファクタリング審査を包括的に実行するエージェント v2
@@ -20,30 +18,32 @@ export const complianceAgentV2 = new Agent({
   model: openai("gpt-4.1"),
   
   tools: {
-    kintoneFetchTool,
-    egoSearchTool,
-    companyVerifyTool,
-    purchaseDataPrepTool,
     ocrPurchaseInfoTool,
     ocrBankStatementTool,
     ocrIdentityToolV2,
     ocrRegistryToolV2,
+    egoSearchTool,
+    companyVerifyTool,
     ocrCollateralTool,
     paymentAnalysisV2Tool,
   },
   instructions: `ファクタリング審査の専門AIです。recordIdを受け取ったら以下を順番に実行：
 
-1. kintoneFetchTool - データ取得
-2. purchaseDataPrepTool - 買取情報準備  
-3. ocrPurchaseInfoTool - 請求書OCR
-4. ocrBankStatementTool - 通帳OCR (recordId, isMainAccount: true)
-5. ocrIdentityToolV2 - 本人確認書類OCR
-6. ocrRegistryToolV2 - 登記簿OCR
-7. egoSearchTool - 代表者信用調査
-8. companyVerifyTool - 企業実在性確認
-9. paymentAnalysisV2Tool - 最終スコアリング
+1. ocrPurchaseInfoTool - 請求書OCR + 買取情報テーブル取得
+2. ocrBankStatementTool - 通帳OCR + 担保情報テーブル取得 (recordId, isMainAccount: true)
+3. ocrIdentityToolV2 - 本人確認書類OCR + 基本情報取得
+4. ocrRegistryToolV2 - 登記簿OCR + 謄本情報テーブル取得
+5. egoSearchTool - 代表者信用調査（identityの結果使用）
+6. companyVerifyTool - 企業実在性確認（identityの結果使用）
+7. paymentAnalysisV2Tool - 全データ統合 + 最終スコアリング
 
-重要: ツールがエラーになっても必ず次のツールに進み、最後まで実行してください。`
+重要: 
+- 各ツールは必要なKintoneデータも同時取得します
+- 各ツール実行前後に「[AGENT DEBUG] ツール名開始/完了」とログ出力すること
+- ツールがエラーになっても必ず次のツールに進み、最後まで実行してください
+- 途中で停止せず、必ず7番まで実行してください
+- 各ツールの結果に関係なく、次のツールに進んでください
+- 完了まで絶対に停止しないでください`
 });
 
 // スコア計算のヘルパー関数

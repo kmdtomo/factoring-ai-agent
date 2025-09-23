@@ -6,10 +6,10 @@ import {
   purchaseDataPrepTool,
   ocrPurchaseInfoTool,
   ocrBankStatementTool,
-  ocrIdentityTool,
+  ocrIdentityToolV2,
   egoSearchTool,
   companyVerifyTool,
-  ocrRegistryTool,
+  ocrRegistryToolV2,
   ocrCollateralTool,
   paymentAnalysisV2Tool,
 } from "../tools";
@@ -60,8 +60,6 @@ const executeComplianceStep = createStep({
           const purchaseOCRResult = await ocrPurchaseInfoTool.execute({
             context: {
               recordId,
-              purchaseData: purchasePrepResult.purchaseData,
-              applicantCompany: kintoneData.basic.会社_屋号名,
             },
             runtimeContext: new RuntimeContext(),
           });
@@ -89,7 +87,6 @@ const executeComplianceStep = createStep({
           context: {
             recordId,
             isMainAccount: true,
-            collateralInfo,
           },
           runtimeContext: new RuntimeContext(),
         });
@@ -103,13 +100,10 @@ const executeComplianceStep = createStep({
 
       // 本人確認書類OCR
       try {
-        if (ocrIdentityTool && typeof ocrIdentityTool.execute === 'function') {
-          const identityResult = await ocrIdentityTool.execute({
+        if (ocrIdentityToolV2 && typeof ocrIdentityToolV2.execute === 'function') {
+          const identityResult = await ocrIdentityToolV2.execute({
             context: {
               recordId,
-              expectedName: kintoneData.basic.代表者名,
-              expectedBirthDate: kintoneData.basic.生年月日,
-              expectedAddress: kintoneData.basic.自宅所在地,
             },
             runtimeContext: new RuntimeContext(),
           });

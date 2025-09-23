@@ -42,11 +42,11 @@ export const companyVerifyTool = createTool({
     const searchResults = [];
     const riskFactors = [];
     
-    // 検索クエリの構築
+    // 検索クエリの構築（建設業向けに最適化）
     const queries = [
       companyName,
-      `${companyName} 会社概要`,
-      `${companyName} 企業情報`,
+      `${companyName} 建設業`,
+      `${companyName} 建設`,
     ];
     
     if (location) {
@@ -82,6 +82,12 @@ export const companyVerifyTool = createTool({
           if (isOfficialWebsite(result, companyName)) {
             hasWebsite = true;
             websiteUrl = result.url;
+            
+            // TODO: 公式サイトの内容を確認（将来的な実装）
+            // const siteVerification = await verifyOfficialWebsite(result.url, companyName, registryInfo);
+            // if (siteVerification.isOfficial) {
+            //   companyDetails = { ...companyDetails, ...siteVerification.extractedInfo };
+            // }
           }
           
           // 企業情報の抽出
