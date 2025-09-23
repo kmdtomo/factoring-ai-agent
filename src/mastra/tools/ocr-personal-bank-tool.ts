@@ -1,6 +1,6 @@
 import { Tool } from "@mastra/core";
 import { generateObject } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import axios from "axios";
 
@@ -17,17 +17,10 @@ export const ocrPersonalBankTool = new Tool({
       filesFound: z.number(),
       accountHolder: z.string().optional().describe("口座名義人"),
       bankName: z.string().optional().describe("金融機関名"),
-      analysisMonths: z.number().optional().describe("分析対象月数"),
     }),
-    notableTransactions: z.array(z.string()).describe("特徴的・注目すべき取引パターン"),
-    usageSummary: z.object({
-      entertainment: z.string().optional().describe("娯楽・レジャー関連の特徴"),
-      business: z.string().optional().describe("事業関連の特徴"),
-      cash: z.string().optional().describe("現金使用の特徴"),
-      others: z.string().optional().describe("その他特徴的な使途"),
-    }),
-    totalTransactions: z.number().optional().describe("総取引件数"),
-    summary: z.string().describe("個人口座使途の総括"),
+    markedTransactions: z.array(z.string()).optional().describe("マーク/メモがある取引"),
+    notablePoints: z.array(z.string()).optional().describe("特に目立つ点（あれば）"),
+    summary: z.string().describe("簡潔な要約（特記事項なしも可）"),
     fileProcessed: z.string().optional().describe("処理したファイル名"),
     error: z.string().optional(),
   }),
@@ -59,8 +52,8 @@ export const ocrPersonalBankTool = new Tool({
             recordId,
             filesFound: 0,
           },
-          notableTransactions: [],
-          usageSummary: {},
+          markedTransactions: [],
+          notablePoints: [],
           summary: "レコードが見つかりませんでした",
         };
       }
@@ -78,8 +71,8 @@ export const ocrPersonalBankTool = new Tool({
             recordId,
             filesFound: 0,
           },
-          notableTransactions: [],
-          usageSummary: {},
+          markedTransactions: [],
+          notablePoints: [],
           summary: "その他通帳（個人口座）の添付ファイルがありません。処理をスキップしました。",
           fileProcessed: "なし",
         };
@@ -126,8 +119,8 @@ export const ocrPersonalBankTool = new Tool({
             recordId,
             filesFound: personalBankFiles.length,
           },
-          notableTransactions: [],
-          usageSummary: {},
+          markedTransactions: [],
+          notablePoints: [],
           summary: "通帳画像の取得に失敗しました",
           error: "通帳画像の取得に失敗しました",
         };
@@ -136,32 +129,33 @@ export const ocrPersonalBankTool = new Tool({
       // OCR + 使途分析プロンプト
       const prompt = `この個人口座の通帳画像（${filesToProcess.length}ファイル）を分析してください：
 
-🎯 【分析目的】
-個人口座の使途を客観的に分析し、特徴的・注目すべき取引パターンを事実ベースで報告する
+📊 【分析方針】
 
-📋 【抽出項目】
-1. 口座名義人・金融機関名
-2. 特徴的な取引パターン（頻繁利用先、大額取引、特異なパターン等）
-3. 使途別の概要（娯楽、事業、現金使用等の特徴）
-4. 総取引件数・分析期間
+🔍 まず確認すること:
+- マークやメモ、手書きの印などがあるか確認
+- あれば、それらは審査担当者が重要と判断した箇所
 
-🔍 【重要な視点】
-- 価値判断は行わず、事実のみを客観的に記載
-- 細かい生活費は省略し、目立つ取引のみに焦点
-- 頻度・金額・パターン性から重要と思われるもののみ抽出
-- ギャンブル等も含め、全て中立的に「事実」として記載
+◆ マーク・メモがある場合:
+→ マークされた取引や、メモの内容を最優先で報告
 
-📊 【出力形式】
-- notableTransactions: 特徴的な取引を箇条書きで
-- usageSummary: カテゴリ別の特徴を簡潔に
-- 総合的な使途の傾向を要約
+◆ マーク・メモがない場合:
+→ 全体をざっと見て、以下に該当するものがあれば報告：
+  - 異常に大きな金額の取引
+  - 明らかに通常と異なるパターン
+  - リスクを示唆する取引（ギャンブル、高額現金引出等）
 
-AIの判断で重要度を決定し、目立つもののみを報告してください。`;
+📝 報告形式:
+- 口座名義・銀行名
+- マーク/メモの内容（あれば）
+- 特記事項（本当に目立つものがあれば全て報告）
+- なければ「特記事項なし」
 
-      console.log(`🤖 [個人口座OCR] OpenAI API 実行中...`);
+⚠️ 重要: 日常的な取引の詳細は不要。本当に審査上重要と思われるもののみ。`;
+
+      console.log(`🤖 [個人口座OCR] Claude 3.7 Sonnet 実行中...`);
 
       const result = await generateObject({
-        model: openai("gpt-4o"),
+        model: anthropic("claude-3-7-sonnet-20250219") as any,
         messages: [
           {
             role: "user",
@@ -174,20 +168,13 @@ AIの判断で重要度を決定し、目立つもののみを報告してくだ
         schema: z.object({
           accountHolder: z.string().optional().describe("口座名義人"),
           bankName: z.string().optional().describe("金融機関名"),
-          analysisMonths: z.number().optional().describe("分析対象月数"),
-          notableTransactions: z.array(z.string()).describe("特徴的・注目すべき取引パターン"),
-          usageSummary: z.object({
-            entertainment: z.string().optional().describe("娯楽・レジャー関連の特徴"),
-            business: z.string().optional().describe("事業関連の特徴"),
-            cash: z.string().optional().describe("現金使用の特徴"),
-            others: z.string().optional().describe("その他特徴的な使途"),
-          }),
-          totalTransactions: z.number().optional().describe("総取引件数"),
-          summary: z.string().describe("個人口座使途の総括"),
+          markedTransactions: z.array(z.string()).optional().describe("マーク/メモがある取引"),
+          notablePoints: z.array(z.string()).optional().describe("特に目立つ点（あれば）"),
+          summary: z.string().describe("簡潔な要約（特記事項なしも可）"),
         }),
       });
 
-      console.log(`✅ [個人口座OCR] 完了 - 特徴的取引: ${result.object.notableTransactions.length}件`);
+      console.log(`✅ [個人口座OCR] 完了`);
 
       return {
         success: true,
@@ -196,11 +183,9 @@ AIの判断で重要度を決定し、目立つもののみを報告してくだ
           filesFound: personalBankFiles.length,
           accountHolder: result.object.accountHolder,
           bankName: result.object.bankName,
-          analysisMonths: result.object.analysisMonths,
         },
-        notableTransactions: result.object.notableTransactions,
-        usageSummary: result.object.usageSummary,
-        totalTransactions: result.object.totalTransactions,
+        markedTransactions: result.object.markedTransactions || [],
+        notablePoints: result.object.notablePoints || [],
         summary: result.object.summary,
         fileProcessed: filesToProcess.map((f: any) => f.name).join(", "),
       };
@@ -214,8 +199,8 @@ AIの判断で重要度を決定し、目立つもののみを報告してくだ
           recordId: context.recordId,
           filesFound: 0,
         },
-        notableTransactions: [],
-        usageSummary: {},
+        markedTransactions: [],
+        notablePoints: [],
         summary: "個人口座OCR処理中にエラーが発生しました",
         error: error instanceof Error ? error.message : "Unknown error",
       };

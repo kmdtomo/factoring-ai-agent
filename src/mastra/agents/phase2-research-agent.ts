@@ -1,5 +1,5 @@
 import { Agent } from "@mastra/core/agent";
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { 
   egoSearchTool,
   companyVerifyTool,
@@ -9,7 +9,7 @@ import {
 export const phase2ResearchAgent = new Agent({
   name: "phase2-research-agent",
   description: "外部調査専門エージェント - 代表者信用調査と企業実在性確認",
-  model: openai("gpt-4o"),
+  model: anthropic("claude-3-7-sonnet-20250219"),
   
   tools: {
     egoSearchTool,

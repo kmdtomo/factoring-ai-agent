@@ -593,90 +593,142 @@ Phase 1で抽出した情報を使用：
 
 ## ワークフロー実装（v3.0）
 
-### マルチエージェント・ワークフロー実装
+### 現在の実装構成
 
-Mastra公式推奨パターンに基づく、3つの専門エージェントによる段階的処理。
+現在は2つのワークフローパターンが実装されており、処理負荷に応じて使い分けが可能。
 
-#### ワークフロー構成
+#### 実装パターン1: マルチエージェント・コンプライアンス・ワークフロー
 ```
-┌─────────────────────────┐
-│ multi-agent-compliance  │
-│      workflow          │
-└─────────────────────────┘
+┌─────────────────────────────────┐
+│ multiAgentComplianceWorkflow    │
+│ (3ステップの直接実行)            │
+└─────────────────────────────────┘
            ↓
-┌─────────────────────────┐
-│ Phase 1: OCR Agent     │
-│ - 買取情報書類OCR      │
-│ - 通帳OCR（メイン）    │
-│ - 本人確認書類OCR      │
-│ - 登記簿OCR            │
-└─────────────────────────┘
+┌─────────────────────────────────┐
+│ Step 1: phase1OCRStep           │
+│ - ocrPurchaseSimpleTool         │
+│ - ocrBankStatementTool          │
+│ - ocrPersonalBankTool           │
+│ - ocrIdentityToolV2             │
+│ - ocrRegistryToolV2             │
+└─────────────────────────────────┘
            ↓ データ受け渡し
-┌─────────────────────────┐
-│ Phase 2: Research Agent │
-│ - エゴサーチ実行       │
-│ - 企業実在性確認       │
-│ - 外部リスク評価       │
-└─────────────────────────┘
+┌─────────────────────────────────┐
+│ Step 2: phase2ResearchStep      │
+│ - egoSearchTool                 │
+│ - companyVerifyTool             │
+└─────────────────────────────────┘
            ↓ データ統合
-┌─────────────────────────┐
-│ Phase 3: Analysis Agent │
-│ - 全データ統合分析     │
-│ - スコアリング         │
-│ - 最終レポート生成     │
-└─────────────────────────┘
+┌─────────────────────────────────┐
+│ Step 3: phase3AnalysisStep      │
+│ - paymentAnalysisV2Tool         │
+│ - 統合スコアリング              │
+│ - 最終レポート生成              │
+└─────────────────────────────────┘
+```
+
+#### 実装パターン2: スプリットフェーズ・ワークフロー
+```
+┌─────────────────────────────────┐
+│ splitPhaseWorkflow              │
+│ (4エージェントの分散処理)       │
+└─────────────────────────────────┘
+           ↓
+┌─────────────────────────────────┐
+│ Agent 1: phase1aOcrHeavyAgent   │
+│ 重いOCR処理に特化               │
+│ - ocrPurchaseSimpleTool         │
+│ - ocrBankStatementTool          │
+│ - ocrPersonalBankTool           │
+└─────────────────────────────────┘
+           ↓
+┌─────────────────────────────────┐
+│ Agent 2: phase1bOcrLightAgent   │
+│ 軽いOCR処理に特化               │
+│ - ocrIdentityToolV2             │
+│ - ocrRegistryToolV2             │
+└─────────────────────────────────┘
+           ↓
+┌─────────────────────────────────┐
+│ Agent 3: phase2ResearchAgent    │
+│ 外部調査専門                    │
+│ - egoSearchTool                 │
+│ - companyVerifyTool             │
+└─────────────────────────────────┘
+           ↓
+┌─────────────────────────────────┐
+│ Agent 4: phase3AnalysisAgent    │
+│ 統合分析専門                    │
+│ - paymentAnalysisV2Tool         │
+└─────────────────────────────────┘
 ```
 
 ### エージェント間のデータフロー
 
 #### Phase 1 → Phase 2 のデータ受け渡し
 ```typescript
-// Phase 1の出力
+// Phase 1の出力（両パターン共通）
 {
-  nextPhaseInputs: {
-    representativeName: "中山葵",     // 本人確認書類から抽出
-    companyName: "株式会社中山総業"   // 本人確認書類から抽出
-  },
-  // その他のOCR結果データ...
+  ocrResults: {
+    purchaseInfo: {...},      // 買取情報
+    bankStatement: {...},     // 通帳情報
+    personalBank: {...},      // 個人口座情報
+    identity: {
+      representativeName: "代表者名",
+      companyName: "会社名",
+      // その他の本人確認情報
+    },
+    registry: {...}           // 登記簿情報
+  }
 }
 ```
 
 #### Phase 2 → Phase 3 のデータ受け渡し
 ```typescript
 {
+  phase1Data: {...},          // Phase 1の全データ
   egoSearchResult: {
     hasNegativeInfo: false,
     riskLevel: "低",
-    summary: "ネガティブ情報なし"
+    details: {...}
   },
   companyVerifyResult: {
-    verified: true,
+    isVerified: true,
     trustScore: 80,
-    summary: "企業実在性確認済み"
-  },
-  riskFlags: []
+    details: {...}
+  }
 }
 ```
 
-#### 各エージェントの独立性
-- 各Phaseは独立したエージェントとして動作
-- エラー発生時も可能な限り処理を継続
-- 部分的な失敗は最終分析で考慮
+### 実装の特徴
 
-### ツールとエージェントのマッピング
+#### multiAgentComplianceWorkflow
+- **特徴**: ステップベースの実装で、各フェーズでツールを直接実行
+- **利点**: シンプルで効率的、オーバーヘッドが少ない
+- **用途**: 標準的な審査案件
+
+#### splitPhaseWorkflow  
+- **特徴**: エージェントベースで、各フェーズが独立したエージェント
+- **利点**: 処理の分散、Phase 1を2つに分割して負荷軽減
+- **用途**: 大量の書類がある案件、並列処理が必要な場合
+
+### ツールの配置
 
 ```
-Phase 1: OCR Agent
-├── ocrPurchaseInfoTool    （買取情報書類処理）
-├── ocrBankStatementTool    （通帳処理）
-├── ocrIdentityToolV2       （本人確認書類処理）
-└── ocrRegistryToolV2       （登記簿処理）
+Phase 1A (Heavy OCR) - 重い画像処理
+├── ocrPurchaseSimpleTool   （請求書OCR）
+├── ocrBankStatementTool    （メイン通帳OCR）
+└── ocrPersonalBankTool     （個人口座OCR）
 
-Phase 2: Research Agent  
+Phase 1B (Light OCR) - 軽い文書処理
+├── ocrIdentityToolV2       （本人確認書類OCR）
+└── ocrRegistryToolV2       （登記簿OCR）
+
+Phase 2 (Research) - 外部調査
 ├── egoSearchTool           （代表者リスク調査）
 └── companyVerifyTool       （企業実在性確認）
 
-Phase 3: Analysis Agent
+Phase 3 (Analysis) - 統合分析
 └── paymentAnalysisV2Tool   （統合分析・スコアリング）
 ```
 
