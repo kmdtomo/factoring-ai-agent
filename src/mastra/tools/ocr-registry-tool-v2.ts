@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import { generateObject } from "ai";
 import axios from "axios";
 
@@ -189,7 +189,7 @@ export const ocrRegistryToolV2 = createTool({
       
       // 1回のAPI呼び出しで全ファイルを処理
       const result = await generateObject({
-        model: openai("gpt-4o"),
+        model: anthropic("claude-3-7-sonnet-20250219") as any,
         messages: [
           {
             role: "user",
