@@ -1,5 +1,7 @@
 export { egoSearchTool } from './ego-search-tool';
 export { companyVerifyTool } from './company-verify-tool';
+export { companyVerifyAITool } from './company-verify-ai-tool';
+export { fraudSiteSearchTool } from './fraud-site-search-tool';
 export { paymentAnalysisTool } from './payment-analysis-tool';
 export { documentOcrTool } from './document-ocr-tool';
 export { documentOcrVisionTool } from './document-ocr-vision-tool';

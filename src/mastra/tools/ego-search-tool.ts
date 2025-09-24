@@ -8,7 +8,8 @@ export const egoSearchTool = createTool({
   id: "ego-search",
   description: "代表者の詐欺情報・ネガティブ情報をWebで検索",
   inputSchema: z.object({
-    name: z.string().describe("検索対象の代表者名"),
+    recordId: z.string().optional().describe("KintoneレコードID（nameの代わりに使用可）"),
+    name: z.string().optional().describe("検索対象の代表者名"),
     birthDate: z.string().optional().describe("生年月日（同姓同名対策）"),
   }),
   outputSchema: z.object({
@@ -34,7 +35,41 @@ export const egoSearchTool = createTool({
     }),
   }),
   execute: async ({ context }) => {
-    const { name, birthDate } = context;
+    let { name, birthDate, recordId } = context;
+    
+    // recordIdが提供された場合、Kintoneから代表者名と生年月日を取得
+    if (!name && recordId) {
+      const domain = process.env.KINTONE_DOMAIN;
+      const apiToken = process.env.KINTONE_API_TOKEN;
+      
+      if (!domain || !apiToken) {
+        throw new Error("Kintone環境変数が設定されていません");
+      }
+      
+      try {
+        const url = `https://${domain}/k/v1/records.json?app=37&query=$id="${recordId}"`;
+        const response = await axios.get(url, {
+          headers: { 'X-Cybozu-API-Token': apiToken },
+        });
+        
+        if (response.data.records.length === 0) {
+          throw new Error(`レコードID: ${recordId} が見つかりません`);
+        }
+        
+        const record = response.data.records[0];
+        name = record.代表者名?.value || "";
+        birthDate = record.生年月日?.value || birthDate;
+        
+        console.log(`[Ego Search Tool] recordId: ${recordId} → 代表者名: ${name}, 生年月日: ${birthDate || "なし"}`);
+      } catch (error) {
+        console.error("[Ego Search Tool] Kintoneデータ取得エラー:", error);
+        throw error;
+      }
+    }
+    
+    if (!name) {
+      throw new Error("代表者名が指定されていません");
+    }
     const fraudSiteResults = [];
     const webSearchResults = [];
     
