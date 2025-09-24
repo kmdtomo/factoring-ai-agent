@@ -1,10 +1,10 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-// 新評価軸に対応した支払い能力分析ツール
+// 支払い能力分析ツール（事実データのみ）
 export const paymentAnalysisV2Tool = createTool({
   id: "payment-analysis-v2",
-  description: "買取情報と担保情報を分析し、新評価軸に基づいてスコアリング",
+  description: "買取情報と担保情報から統計的事実を抽出",
   inputSchema: z.object({
     // 買取情報
     purchaseInfo: z.object({
@@ -41,204 +41,153 @@ export const paymentAnalysisV2Tool = createTool({
     })).optional(),
   }),
   outputSchema: z.object({
-    // 買取情報評価
-    purchaseEvaluation: z.object({
-      kakemeRate: z.number().describe("掛目（%）"),
-      kakemeScore: z.number().describe("掛目スコア（20点満点）"),
-      kakemeRisk: z.enum(["low", "medium", "high"]),
-      details: z.string(),
+    // 買取情報の事実データ
+    purchaseFactData: z.object({
+      kakemeRate: z.number().describe("掛目率（%）"),
+      totalPurchaseAmount: z.number().describe("買取債権額合計"),
+      totalPaymentAmount: z.number().describe("買取額合計"),
+      purchasesByCompany: z.array(z.object({
+        companyName: z.string(),
+        purchaseAmount: z.number(),
+        paymentAmount: z.number(),
+        individualKakemeRate: z.number().describe("個別掛目率（%）"),
+      })),
     }),
     
-    // 担保評価
-    collateralEvaluation: z.object({
-      // 即時回収能力
-      immediateCoverage: z.object({
-        totalNextPayment: z.number().describe("次回入金予定額合計"),
-        coverageRate: z.number().describe("カバー率（%）"),
-        score: z.number().describe("即時回収能力スコア（20点満点）"),
-        mainCompany: z.string().optional().describe("主要担保企業"),
-        risk: z.enum(["low", "medium", "high"]),
-      }),
-      // 入金安定性
-      paymentStability: z.object({
-        companies: z.array(z.object({
-          name: z.string(),
-          average: z.number(),
-          variability: z.number().describe("変動係数（%）"),
-          reliability: z.enum(["stable", "moderate", "unstable"]),
-        })),
-        overallVariability: z.number().describe("全体の変動係数（%）"),
-        score: z.number().describe("入金安定性スコア（20点満点）"),
-        risk: z.enum(["low", "medium", "high"]),
-      }),
+    // 担保情報の事実データ
+    collateralFactData: z.object({
+      coverageRate: z.number().describe("担保カバー率（%）"),
+      totalNextPayment: z.number().describe("次回入金予定額合計"),
+      largestPaymentCompany: z.object({
+        name: z.string().optional(),
+        amount: z.number().optional(),
+        percentage: z.number().optional().describe("全体に占める割合（%）"),
+      }).describe("最大入金予定企業"),
+      companyPaymentData: z.array(z.object({
+        name: z.string(),
+        nextPaymentAmount: z.number(),
+        pastThreeMonthsPayments: z.array(z.number()).describe("過去3ヶ月の支払い額"),
+        average: z.number().describe("過去3ヶ月平均"),
+        standardDeviation: z.number().describe("標準偏差"),
+        variability: z.number().describe("変動係数（%）"),
+        paymentCount: z.number().describe("支払い実績回数"),
+        hasNote: z.boolean(),
+        noteContent: z.string().optional(),
+      })),
     }),
     
-    // 統合評価
-    summary: z.object({
-      totalScore: z.number().describe("買取＋担保の合計スコア（60点満点）"),
-      mainRisks: z.array(z.string()),
-      recommendations: z.array(z.string()),
-      criticalFindings: z.array(z.string()).optional(),
+    // 統計サマリー（事実のみ）
+    statistics: z.object({
+      totalCompanies: z.number().describe("全企業数"),
+      companiesWithPaymentHistory: z.number().describe("支払い履歴のある企業数"),
+      companiesWithoutHistory: z.number().describe("支払い履歴のない企業数"),
+      overallAveragePayment: z.number().describe("全体の平均支払い額"),
+      overallPaymentVariability: z.number().describe("全体の支払い変動係数（%）"),
     }),
   }),
+  
   execute: async ({ context }) => {
     const { purchaseInfo, collateralInfo, registryInfo } = context;
     
-    // 1. 買取情報評価（掛目分析）
+    // 1. 買取情報の事実データ抽出
     const kakemeRate = (purchaseInfo.totalPaymentAmount / purchaseInfo.totalPurchaseAmount) * 100;
-    let kakemeScore = 0;
-    let kakemeRisk: "low" | "medium" | "high" = "high";
     
-    if (kakemeRate <= 80) {
-      kakemeScore = 20;
-      kakemeRisk = "low";
-    } else if (kakemeRate <= 85) {
-      kakemeScore = 10;
-      kakemeRisk = "medium";
-    } else {
-      kakemeScore = 0;
-      kakemeRisk = "high";
-    }
+    const purchasesByCompany = purchaseInfo.purchases.map(purchase => ({
+      companyName: purchase.companyName,
+      purchaseAmount: purchase.purchaseAmount,
+      paymentAmount: purchase.paymentAmount,
+      individualKakemeRate: Math.round((purchase.paymentAmount / purchase.purchaseAmount) * 100 * 10) / 10,
+    }));
     
-    // 2. 担保評価 - 即時回収能力
+    // 2. 担保情報の事実データ抽出
     const totalNextPayment = collateralInfo.collaterals.reduce(
       (sum, c) => sum + c.nextPaymentAmount, 0
     );
     const coverageRate = (totalNextPayment / purchaseInfo.totalPaymentAmount) * 100;
     
-    let coverageScore = 0;
-    let coverageRisk: "low" | "medium" | "high" = "high";
-    if (coverageRate >= 100) {
-      coverageScore = 20;
-      coverageRisk = "low";
-    } else if (coverageRate >= 80) {
-      coverageScore = 10;
-      coverageRisk = "medium";
-    } else {
-      coverageScore = 0;
-      coverageRisk = "high";
-    }
-    
-    // 主要担保企業の特定
-    const mainCompany = collateralInfo.collaterals
+    // 最大入金予定企業の特定
+    const largestPaymentCompany = collateralInfo.collaterals
       .filter(c => c.nextPaymentAmount > 0)
-      .sort((a, b) => b.nextPaymentAmount - a.nextPaymentAmount)[0]?.companyName;
+      .sort((a, b) => b.nextPaymentAmount - a.nextPaymentAmount)[0];
     
-    // 3. 担保評価 - 入金安定性
-    const stabilityAnalysis = collateralInfo.collaterals.map(company => {
-      const payments = [
+    const largestPaymentData = largestPaymentCompany ? {
+      name: largestPaymentCompany.companyName,
+      amount: largestPaymentCompany.nextPaymentAmount,
+      percentage: Math.round((largestPaymentCompany.nextPaymentAmount / totalNextPayment) * 100 * 10) / 10,
+    } : {
+      name: undefined,
+      amount: undefined,
+      percentage: undefined,
+    };
+    
+    // 3. 各企業の支払いデータ分析
+    const companyPaymentData = collateralInfo.collaterals.map(company => {
+      const pastPayments = [
         company.pastPayments.threeMonthsAgo,
         company.pastPayments.twoMonthsAgo,
         company.pastPayments.lastMonth,
-      ].filter(p => p > 0);
+      ];
       
-      if (payments.length === 0) {
-        return {
-          name: company.companyName,
-          average: 0,
-          variability: 100,
-          reliability: "unstable" as const,
-        };
+      const validPayments = pastPayments.filter(p => p > 0);
+      const average = validPayments.length > 0
+        ? validPayments.reduce((a, b) => a + b, 0) / validPayments.length
+        : 0;
+      
+      let stdDev = 0;
+      let variability = 0;
+      
+      if (validPayments.length > 1) {
+        const variance = validPayments.reduce((sum, p) => sum + Math.pow(p - average, 2), 0) / validPayments.length;
+        stdDev = Math.sqrt(variance);
+        variability = average > 0 ? (stdDev / average) * 100 : 0;
       }
-      
-      const average = payments.reduce((a, b) => a + b, 0) / payments.length;
-      const variance = payments.reduce((sum, p) => sum + Math.pow(p - average, 2), 0) / payments.length;
-      const stdDev = Math.sqrt(variance);
-      const variability = average > 0 ? (stdDev / average) * 100 : 100;
-      
-      let reliability: "stable" | "moderate" | "unstable" = "unstable";
-      if (variability <= 15) reliability = "stable";
-      else if (variability <= 30) reliability = "moderate";
       
       return {
         name: company.companyName,
-        average,
+        nextPaymentAmount: company.nextPaymentAmount,
+        pastThreeMonthsPayments: pastPayments,
+        average: Math.round(average),
+        standardDeviation: Math.round(stdDev),
         variability: Math.round(variability * 10) / 10,
-        reliability,
+        paymentCount: validPayments.length,
+        hasNote: !!company.note,
+        noteContent: company.note,
       };
     });
     
-    // 全体の変動係数（主要企業のみ）
-    const significantCompanies = stabilityAnalysis.filter(c => c.average > 100000);
+    // 4. 統計サマリー
+    const companiesWithHistory = companyPaymentData.filter(c => c.paymentCount > 0).length;
+    const companiesWithoutHistory = companyPaymentData.filter(c => c.paymentCount === 0).length;
+    
+    const allValidPayments = companyPaymentData.filter(c => c.average > 0);
+    const overallAveragePayment = allValidPayments.length > 0
+      ? allValidPayments.reduce((sum, c) => sum + c.average, 0) / allValidPayments.length
+      : 0;
+    
+    const significantCompanies = allValidPayments.filter(c => c.average > 100000);
     const overallVariability = significantCompanies.length > 0
       ? significantCompanies.reduce((sum, c) => sum + c.variability, 0) / significantCompanies.length
-      : 100;
-    
-    let stabilityScore = 0;
-    let stabilityRisk: "low" | "medium" | "high" = "high";
-    if (overallVariability <= 15) {
-      stabilityScore = 20;
-      stabilityRisk = "low";
-    } else if (overallVariability <= 30) {
-      stabilityScore = 10;
-      stabilityRisk = "medium";
-    } else {
-      stabilityScore = 0;
-      stabilityRisk = "high";
-    }
-    
-    // 4. リスク要因の特定
-    const mainRisks: string[] = [];
-    const recommendations: string[] = [];
-    const criticalFindings: string[] = [];
-    
-    if (kakemeRisk === "high") {
-      mainRisks.push(`掛目${kakemeRate.toFixed(1)}%は高リスク水準`);
-      recommendations.push("掛目を80%以下に引き下げることを推奨");
-    }
-    
-    if (coverageRisk === "high") {
-      criticalFindings.push(`担保不足：次回入金で${coverageRate.toFixed(0)}%しかカバーできない`);
-      recommendations.push("追加担保の設定が必要");
-    } else if (mainCompany && coverageRate >= 100) {
-      const mainCompanyPayment = collateralInfo.collaterals.find(c => c.companyName === mainCompany)?.nextPaymentAmount || 0;
-      if (mainCompanyPayment >= purchaseInfo.totalPaymentAmount) {
-        mainRisks.push(`${mainCompany}1社に依存（${(mainCompanyPayment / purchaseInfo.totalPaymentAmount * 100).toFixed(0)}%）`);
-      }
-    }
-    
-    if (stabilityRisk === "high") {
-      mainRisks.push("入金履歴が不安定");
-    }
-    
-    // 備考情報の活用
-    collateralInfo.collaterals.forEach(c => {
-      if (c.note && c.note.includes("早め入金")) {
-        // ポジティブな要素
-      } else if (c.note && c.nextPaymentAmount > 0 && c.pastPayments.average === 0) {
-        criticalFindings.push(`${c.companyName}：過去実績なしで${c.nextPaymentAmount.toLocaleString()}円の入金予定`);
-      }
-    });
-    
-    const totalScore = kakemeScore + coverageScore + stabilityScore;
+      : 0;
     
     return {
-      purchaseEvaluation: {
+      purchaseFactData: {
         kakemeRate: Math.round(kakemeRate * 10) / 10,
-        kakemeScore,
-        kakemeRisk,
-        details: `買取債権額${purchaseInfo.totalPurchaseAmount.toLocaleString()}円に対し、買取額${purchaseInfo.totalPaymentAmount.toLocaleString()}円（掛目${kakemeRate.toFixed(1)}%）`,
+        totalPurchaseAmount: purchaseInfo.totalPurchaseAmount,
+        totalPaymentAmount: purchaseInfo.totalPaymentAmount,
+        purchasesByCompany,
       },
-      collateralEvaluation: {
-        immediateCoverage: {
-          totalNextPayment,
-          coverageRate: Math.round(coverageRate),
-          score: coverageScore,
-          mainCompany,
-          risk: coverageRisk,
-        },
-        paymentStability: {
-          companies: stabilityAnalysis,
-          overallVariability: Math.round(overallVariability * 10) / 10,
-          score: stabilityScore,
-          risk: stabilityRisk,
-        },
+      collateralFactData: {
+        coverageRate: Math.round(coverageRate),
+        totalNextPayment,
+        largestPaymentCompany: largestPaymentData,
+        companyPaymentData,
       },
-      summary: {
-        totalScore,
-        mainRisks,
-        recommendations,
-        criticalFindings: criticalFindings.length > 0 ? criticalFindings : undefined,
+      statistics: {
+        totalCompanies: collateralInfo.collaterals.length,
+        companiesWithPaymentHistory: companiesWithHistory,
+        companiesWithoutHistory: companiesWithoutHistory,
+        overallAveragePayment: Math.round(overallAveragePayment),
+        overallPaymentVariability: Math.round(overallVariability * 10) / 10,
       },
     };
   },

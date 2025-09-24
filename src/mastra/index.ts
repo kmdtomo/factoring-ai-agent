@@ -6,6 +6,7 @@ import { complianceWorkflowV2 } from './workflows/compliance-workflow-v2';
 import { simpleComplianceWorkflow } from './workflows/simple-compliance-workflow';
 import { multiAgentComplianceWorkflow } from './workflows/multi-agent-compliance-workflow';
 import { splitPhaseWorkflow } from './workflows/split-phase-workflow';
+import { agentBasedComplianceWorkflow } from './workflows/agent-based-compliance-workflow';
 import { complianceAgent } from './agents/compliance-agent';
 import { complianceAgentV2 } from './agents/compliance-agent-v2';
 import { simpleComplianceAgent } from './agents/simple-compliance-agent';
@@ -21,8 +22,9 @@ export const mastra = new Mastra({
     // complianceWorkflow,        // 一時無効化
     // complianceWorkflowV2,      // 一時無効化  
     // simpleComplianceWorkflow,  // 一時無効化
-    multiAgentComplianceWorkflow, // ← マルチエージェント版
-    splitPhaseWorkflow,           // ← Split-Phase版（重い処理分割）
+    // multiAgentComplianceWorkflow, // 旧版（ツール直接呼び出し）
+    // splitPhaseWorkflow,           // 旧版（データ受け渡しなし）
+    agentBasedComplianceWorkflow,    // ← 新版（エージェントベース）
   },
   agents: { 
     // complianceAgentV2,         // ワークフロー完成により一時無効化

@@ -10,7 +10,7 @@ import {
 export const phase1aOcrHeavyAgent = new Agent({
   name: "phase1a-ocr-heavy-agent",
   description: "重い画像OCR処理専門エージェント - 請求書、メイン通帳、個人口座の大容量画像処理",
-  model: anthropic("claude-3-7-sonnet-20250219"), // 日本語OCRに最適
+  model: anthropic("claude-3-5-sonnet-20241022"), // 日本語OCRに最適
   
   tools: {
     ocrPurchaseSimpleTool,
@@ -93,5 +93,7 @@ export const phase1aOcrHeavyAgent = new Agent({
 - マークモードでは照合に関する言及を絶対にしない
 - ツールのsummaryフィールドのみを使用し、勝手な解釈を加えない
 
-🎯 **最終出力**: 3つ全ツール実行後に各ツールのsummaryを含めて報告（上記形式を厳守）`
+🎯 **最終出力**: 3つ全ツール実行後に各ツールのsummaryを含めて報告（上記形式を厳守）
+
+⚠️ **処理終了**: 全ての報告が完了したら即座に応答を終了すること。追加の分析や説明は不要。`
 });
