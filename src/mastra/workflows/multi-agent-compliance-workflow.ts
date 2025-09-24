@@ -8,10 +8,11 @@ import {
   ocrPersonalBankTool,
   ocrIdentityToolV2,
   ocrRegistryToolV2,
-  egoSearchTool,
-  companyVerifyTool,
+  fraudSiteSearchTool,
+  companyVerifyAITool,
   paymentAnalysisV2Tool,
 } from "../tools";
+import { phase3AnalysisAgent } from "../agents/phase3-analysis-agent";
 
 // Phase 1: OCRステップ
 const phase1OCRStep = createStep({
@@ -24,6 +25,7 @@ const phase1OCRStep = createStep({
     success: z.boolean(),
     purchaseData: z.any(),
     bankData: z.any(),
+    personalBankData: z.any(),
     identityData: z.any(),
     registryData: z.any(),
     nextPhaseInputs: z.object({
@@ -86,6 +88,9 @@ const phase1OCRStep = createStep({
         runtimeContext: new RuntimeContext(),
       });
       
+      // recordIdを結果に含める
+      purchaseResult.recordId = recordId;
+      
       const bankResult = await ocrBankStatementTool.execute({
         context: { recordId },
         runtimeContext: new RuntimeContext(),
@@ -98,41 +103,56 @@ const phase1OCRStep = createStep({
       
       const registryResult = await ocrRegistryToolV2.execute({
         context: { 
-          recordId,
-          targetCompanies
+          recordId
         },
         runtimeContext: new RuntimeContext(),
       });
       
       // 個人口座OCRツールも実行
-      const personalBankResult = await ocrPersonalBankTool?.execute({
+      const personalBankResult = await ocrPersonalBankTool.execute({
         context: { recordId },
         runtimeContext: new RuntimeContext(),
       });
       
       console.log(`[PHASE 1] OCR処理完了`);
       
+      // 代表者名と会社名を取得（identityResultから取得できない場合はKintoneデータから）
+      const representativeName = identityResult.extractedInfo?.name || 
+                               identityResult.processingDetails?.expectedName || 
+                               record.代表者名?.value || 
+                               "不明";
+      const companyName = applicantCompany.name || "不明";
+      
       return {
         success: true,
         purchaseData: {
           success: purchaseResult.success,
-          summary: `買取情報処理: ${purchaseResult.success ? '成功' : '失敗'}`
+          summary: `買取情報処理: ${purchaseResult.success ? '成功' : '失敗'}`,
+          data: purchaseResult
         },
         bankData: {
           success: bankResult.success,
-          summary: `通帳処理: ${bankResult.success ? '成功' : '失敗'}`
+          summary: `通帳処理: ${bankResult.success ? '成功' : '失敗'}`,
+          data: bankResult
+        },
+        personalBankData: {
+          success: personalBankResult.success,
+          summary: `個人口座処理: ${personalBankResult.success ? '成功' : '失敗'}`,
+          data: personalBankResult
         },
         identityData: {
           success: identityResult.success,
-          summary: `本人確認処理: ${identityResult.success ? '成功' : '失敗'}`
+          summary: `本人確認処理: ${identityResult.success ? '成功' : '失敗'}`,
+          data: identityResult
         },
         registryData: {
           success: registryResult.success,
-          summary: `登記簿処理: ${registryResult.success ? '成功' : '失敗'}`
+          summary: `登記簿処理: ${registryResult.success ? '成功' : '失敗'}`,
+          data: registryResult
         },
         nextPhaseInputs: {
-          representativeName: identityResult.basicInfo?.representativeName || "不明",
-          companyName: identityResult.basicInfo?.companyName || "不明",
+          representativeName,
+          companyName,
         },
         summary: "Phase 1: OCR処理完了"
       };
@@ -152,6 +172,7 @@ const phase2ResearchStep = createStep({
     success: z.boolean(),
     purchaseData: z.any(),
     bankData: z.any(),
+    personalBankData: z.any(),
     identityData: z.any(),
     registryData: z.any(),
     nextPhaseInputs: z.object({
@@ -161,6 +182,15 @@ const phase2ResearchStep = createStep({
     summary: z.string(),
   }),
   outputSchema: z.object({
+    // Phase 1の全データを保持
+    phase1Data: z.object({
+      purchaseData: z.any(),
+      bankData: z.any(),
+      personalBankData: z.any(),
+      identityData: z.any(),
+      registryData: z.any(),
+    }),
+    // Phase 2の結果
     success: z.boolean(),
     egoSearchResult: z.any(),
     companyVerifyResult: z.any(),
@@ -174,35 +204,48 @@ const phase2ResearchStep = createStep({
       console.log(`[PHASE 2] 外部調査開始`);
       
       // Phase 2: 外部調査ツール実行
-      const egoResult = await egoSearchTool.execute({
-        context: { name: representativeName },
+      // recordIdから取得する方が確実
+      const recordId = inputData.purchaseData?.data?.recordId || inputData.identityData?.data?.processingDetails?.recordId;
+      
+      const egoResult = await fraudSiteSearchTool.execute({
+        context: recordId ? { recordId } : { name: representativeName },
         runtimeContext: new RuntimeContext(),
       });
       
-      const companyResult = await companyVerifyTool.execute({
-        context: { companyName },
+      const companyResult = await companyVerifyAITool.execute({
+        context: recordId ? { recordId } : { companyName },
         runtimeContext: new RuntimeContext(),
       });
       
       console.log(`[PHASE 2] 外部調査完了`);
       
       return {
+        // Phase 1の全データを保持して渡す
+        phase1Data: {
+          purchaseData: inputData.purchaseData,
+          bankData: inputData.bankData,
+          personalBankData: inputData.personalBankData,
+          identityData: inputData.identityData,
+          registryData: inputData.registryData,
+        },
         success: true,
+        // fraudSiteSearchToolの実際の出力形式
         egoSearchResult: {
-          hasNegativeInfo: egoResult.summary?.hasNegativeInfo || false,
-          riskLevel: egoResult.summary?.hasNegativeInfo ? "中" : "低",
-          summary: egoResult.summary?.details || "ネガティブ情報なし"
+          name: egoResult.name,
+          fraudSites: egoResult.fraudSites || [],
+          negativeSearchResults: egoResult.negativeSearchResults || [],
+          // 判定用の追加フィールド
+          hasNegativeInfo: (egoResult.fraudSites?.some(site => site.searchResults.length > 0) || 
+                           egoResult.negativeSearchResults?.some(result => result.results.length > 0)) || false
         },
+        // companyVerifyAIToolの実際の出力形式
         companyVerifyResult: {
-          verified: companyResult.verified || false,
-          confidence: companyResult.confidence || 0,
-          trustScore: companyResult.verified ? 80 : 40,
-          webPresence: companyResult.webPresence || {},
-          searchResults: companyResult.searchResults || [],
-          riskFactors: companyResult.riskFactors || [],
-          summary: companyResult.verified ? "企業実在性確認済み" : "要確認"
+          companyName: companyResult.companyName,
+          companyLocation: companyResult.companyLocation,
+          homeLocation: companyResult.homeLocation,
+          searchQueries: companyResult.searchQueries || []
         },
-        riskFlags: egoResult.summary?.hasNegativeInfo ? ["代表者リスク"] : [],
+        riskFlags: [],
         summary: "Phase 2: 外部調査完了"
       };
       
@@ -218,6 +261,15 @@ const phase3AnalysisStep = createStep({
   id: "phase3-final-analysis",
   description: "Phase 3: 最終分析とレポート生成",
   inputSchema: z.object({
+    // Phase 1の全データ
+    phase1Data: z.object({
+      purchaseData: z.any(),
+      bankData: z.any(),
+      personalBankData: z.any(),
+      identityData: z.any(),
+      registryData: z.any(),
+    }),
+    // Phase 2のデータ
     success: z.boolean(),
     egoSearchResult: z.any(),
     companyVerifyResult: z.any(),
@@ -230,27 +282,45 @@ const phase3AnalysisStep = createStep({
     riskLevel: z.string(),
     recommendation: z.string(),
     summary: z.string(),
+    detailedReport: z.string().optional(),
   }),
   execute: async ({ inputData }) => {
     
     try {
       console.log(`[PHASE 3] 最終分析開始`);
+      console.log(`[PHASE 3] 受け取ったデータ:`, {
+        phase1DataKeys: Object.keys(inputData.phase1Data),
+        phase2DataKeys: ['egoSearchResult', 'companyVerifyResult', 'riskFlags']
+      });
       
-      // 簡易分析
+      // Phase 3エージェントを呼び出し、全データを渡す
+      const phase3Response = await phase3AnalysisAgent.generate(
+        `以下の全データを統合して最終分析レポートを作成してください：
+        
+        Phase 1 データ:
+        ${JSON.stringify(inputData.phase1Data, null, 2)}
+        
+        Phase 2 データ:
+        - エゴサーチ結果: ${JSON.stringify(inputData.egoSearchResult, null, 2)}
+        - 企業確認結果: ${JSON.stringify(inputData.companyVerifyResult, null, 2)}
+        - リスクフラグ: ${JSON.stringify(inputData.riskFlags, null, 2)}`
+      );
+      
+      // 簡易分析（フォールバック用）
       const baseScore = 60;
-      const phase1Score = 10; // Phase1のデータは前ステップの結果から参照
+      const phase1Score = 10;
       const phase2Score = inputData.egoSearchResult?.hasNegativeInfo ? 30 : 80;
-      
       const finalScore = Math.min(100, Math.max(0, baseScore + phase1Score + (phase2Score - 50)));
       
-      console.log(`[PHASE 3] 最終分析完了 - スコア: ${finalScore}`);
+      console.log(`[PHASE 3] 最終分析完了`);
       
       const result = {
         success: true,
         finalScore,
         riskLevel: finalScore >= 80 ? "低" : finalScore >= 60 ? "中" : "高",
         recommendation: finalScore >= 80 ? "承認推奨" : finalScore >= 60 ? "条件付き承認" : "要再検討",
-        summary: `Phase 3: 最終分析完了 - スコア: ${finalScore}点 (${finalScore >= 80 ? "低リスク" : finalScore >= 60 ? "中リスク" : "高リスク"})`,
+        summary: `Phase 3: 最終分析完了`,
+        detailedReport: phase3Response.text || phase3Response.toString()
       };
       
       console.log(`[PHASE 3] 最終結果:`, JSON.stringify(result, null, 2));

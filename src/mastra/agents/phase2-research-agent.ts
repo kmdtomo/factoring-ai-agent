@@ -9,7 +9,7 @@ import {
 export const phase2ResearchAgent = new Agent({
   name: "phase2-research-agent",
   description: "外部調査専門エージェント - 代表者信用調査と企業実在性確認",
-  model: anthropic("claude-3-7-sonnet-20250219"),
+  model: anthropic("claude-3-haiku-20240307"), // Haikuでコスト削減
   
   tools: {
     fraudSiteSearchTool,
@@ -62,5 +62,7 @@ export const phase2ResearchAgent = new Agent({
 
 ※総合判断や評価は不要。事実のみを報告すること。
 
-入力: recordId`
+入力: recordId
+
+⚠️ **処理終了**: 全ての報告が完了したら即座に応答を終了すること。追加の分析や説明は不要。`
 });

@@ -1,5 +1,5 @@
 import { Agent } from "@mastra/core/agent";
-import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { 
   ocrIdentityToolV2,
   ocrRegistryToolV2,
@@ -9,7 +9,7 @@ import {
 export const phase1bOcrLightAgent = new Agent({
   name: "phase1b-ocr-light-agent",
   description: "軽量OCR処理専門エージェント - 本人確認書類、登記簿の軽量書類処理",
-  model: anthropic("claude-3-7-sonnet-20250219"), // 日本語OCRに最適
+  model: openai("gpt-4o"), // GPT-4oに変更してレート制限回避
   
   tools: {
     ocrIdentityToolV2,
@@ -50,5 +50,7 @@ export const phase1bOcrLightAgent = new Agent({
   申込者: 企業名 → 登記確認済/資本金/設立年
   買取企業: 企業名 → 登記確認済/未確認
 
-🎯 **最終出力**: 2つ全ツール実行後に各ツールのsummaryを含めて報告`
+🎯 **最終出力**: 2つ全ツール実行後に各ツールのsummaryを含めて報告
+
+⚠️ **処理終了**: 全ての報告が完了したら即座に応答を終了すること。追加の分析や説明は不要。`
 });
