@@ -9,7 +9,7 @@ import {
 export const phase2ResearchAgent = new Agent({
   name: "phase2-research-agent",
   description: "外部調査専門エージェント - 代表者信用調査と企業実在性確認",
-  model: anthropic("claude-3-haiku-20240307"), // Haikuでコスト削減
+  model: anthropic("claude-3-7-sonnet-20250219"), // 3.7 Sonnetで信頼性向上
   
   tools: {
     fraudSiteSearchTool,
@@ -42,8 +42,9 @@ export const phase2ResearchAgent = new Agent({
     - 自治体の入札・契約情報
     - 取引先企業での言及
     - 業界団体のサイト
-  * 会社所在地がない場合は、自宅所在地と検索結果の地域を照合
-  * 通勤可能な範囲（車・電車で1-2時間程度）であれば同一企業の可能性を考慮
+  * 会社名・所在地の完全一致を原則とする
+  * 類似名称は別企業の可能性を考慮して判定
+  * 所在地が異なる場合は注意深く判定
   * 求人サイト、地図サイト、SNSは公式サイトとしない
 
 【出力形式】
@@ -56,7 +57,8 @@ export const phase2ResearchAgent = new Agent({
 2. 企業実在性:
    - 公式サイト: あり/なし（URLも記載）
    - 企業実在性: あり/なし
-   - 実在の根拠（簡潔）: 建設業許可、商工会議所、取引先サイト等での掲載
+   - 実在の根拠（簡潔）: 会社名・所在地が完全一致する情報源を明記
+   - 類似名称の別企業: 検出された場合は明記
    - 検索結果（生データ）:
      * 各検索クエリで見つかった上位3件のタイトル、URL、スニペット
 
