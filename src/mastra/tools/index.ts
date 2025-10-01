@@ -23,3 +23,6 @@ export { ocrRegistryTool } from './ocr-registry-tool';
 export { ocrRegistryToolV2 } from './ocr-registry-tool-v2';
 export { ocrCollateralTool } from './ocr-collateral-tool';
 export { purchaseDataPrepTool } from './purchase-data-prep-tool';
+
+// Google Vision APIツール
+export { googleVisionOcrTool } from './google-vision-ocr-tool';
