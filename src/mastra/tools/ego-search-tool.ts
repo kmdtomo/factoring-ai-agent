@@ -131,29 +131,18 @@ export const egoSearchTool = createTool({
         const results = await performGoogleSearch(query);
         const hasResults = results && results.length > 0;
         
-        // 結果が見つかった場合のみ、実際に名前が含まれているかチェック
-        let actuallyFound = false;
-        let filteredResults = [];
-        
-        if (hasResults) {
-          // 検索結果に実際に人名が含まれているか確認
-          for (const result of results) {
-            const nameInContent = result.title.includes(name) || result.snippet.includes(name);
-            if (nameInContent) {
-              actuallyFound = true;
-              filteredResults.push({
-                title: result.title,
-                url: result.link,
-                snippet: result.snippet,
-              });
-            }
-          }
-        }
+        // 全ての検索結果を返す（フィルタリングしない）
+        // AI判定はワークフロー側で行う
+        const allResults = hasResults ? results.map((result: any) => ({
+          title: result.title,
+          url: result.link,
+          snippet: result.snippet,
+        })) : [];
         
         negativeSearchResults.push({
           query,
-          found: actuallyFound,
-          results: actuallyFound ? filteredResults : undefined,
+          found: hasResults, // 検索結果があるかどうかのみ
+          results: hasResults ? allResults : undefined,
         });
       } catch (error) {
         console.error(`Search error for query "${query}":`, error);

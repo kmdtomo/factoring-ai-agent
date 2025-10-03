@@ -1,6 +1,6 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { generateObject } from "ai";
 import axios from "axios";
 
@@ -113,11 +113,6 @@ export const ocrIdentityToolV2 = createTool({
 2. 生年月日を読み取り
 3. 住所を読み取り（番地・部屋番号まで含む完全な住所）
 
-追加情報（運転免許証の場合）:
-4. 免許証の色（ゴールド/ブルー/グリーン）
-5. 有効期限
-6. 違反回数（裏面記載の場合）
-
 ルール:
 - documentTypeは必須項目。必ず書類の種類を特定して報告
 - 運転免許証なら「運転免許証」、パスポートなら「パスポート」など具体的に
@@ -189,7 +184,7 @@ export const ocrIdentityToolV2 = createTool({
       let bestResult: any;
       try {
         const result = await generateObject({
-          model: anthropic("claude-3-7-sonnet-20250219") as any,
+          model: openai("gpt-4o-mini"),
           messages: [
             {
               role: "user",
@@ -200,9 +195,6 @@ export const ocrIdentityToolV2 = createTool({
             name: z.string().optional().describe("読み取った氏名"),
             birthDate: z.string().optional().describe("読み取った生年月日"),
             address: z.string().optional().describe("読み取った住所（番地まで含む）"),
-            licenseColor: z.enum(["gold", "blue", "green", "unknown"]).optional().describe("免許証の色"),
-            expiryDate: z.string().optional().describe("有効期限"),
-            violations: z.number().optional().describe("違反回数"),
             documentType: z.string().describe("検出された書類の種類"),
           }),
           mode: "json",
@@ -246,9 +238,7 @@ export const ocrIdentityToolV2 = createTool({
         },
         documentType: bestResult.documentType || "不明",
         licenseInfo: {
-          licenseColor: bestResult.licenseColor || "unknown",
-          expiryDate: bestResult.expiryDate,
-          violations: bestResult.violations,
+          licenseColor: "unknown" as const,
         },
         processedFiles,
         summary,
