@@ -1,7 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import axios from "axios";
-import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { generateText } from "ai";
 
 // 環境変数から設定を取得する関数
@@ -23,46 +23,12 @@ export const purchaseVerificationToolMinimal = createTool({
       pageCount: z.number(),
       confidence: z.number(),
     })).describe("Google Vision OCRで抽出した買取書類データ"),
-    model: z.string().optional().default("claude-3-5-sonnet-20241022"),
+    model: z.string().optional().default("gpt-4o"),
   }),
   
   outputSchema: z.object({
     success: z.boolean(),
-    summary: z.string(),
-    metadata: z.object({
-      recordId: z.string(),
-      documentCount: z.number(),
-      verificationResults: z.object({
-        総合評価: z.enum(["一致", "部分一致", "不一致"]),
-        詳細: z.array(z.object({
-          項目: z.string(),
-          OCR値: z.string(),
-          Kintone値: z.string(),
-          判定: z.enum(["一致", "不一致"]),
-        })),
-      }),
-    }),
-    purchaseInfo: z.object({
-      totalAmount: z.number().describe("総債権額"),
-      debtorCompanies: z.array(z.object({
-        name: z.string().describe("第三債務者名"),
-        amount: z.number().describe("請求額"),
-        dueDate: z.string().optional().describe("支払期日"),
-        invoiceNumber: z.string().optional().describe("請求書番号"),
-      })),
-      paymentTerms: z.string().optional().describe("支払条件"),
-      applicantCompany: z.string().describe("申込者企業名"),
-    }),
-    analysisDetails: z.object({
-      extractedText: z.string().describe("抽出されたテキスト（要約）"),
-      keyFindings: z.array(z.string()).describe("重要な発見事項"),
-      confidence: z.number().describe("分析の信頼度"),
-    }),
-    costInfo: z.object({
-      ocrCost: z.number(),
-      analysisCost: z.number(),
-      totalCost: z.number(),
-    }),
+    verificationResult: z.enum(["一致", "部分一致", "不一致"]).describe("Kintone照合結果"),
   }),
   
   execute: async ({ context }) => {
@@ -105,17 +71,32 @@ export const purchaseVerificationToolMinimal = createTool({
         .map(doc => `【${doc.fileName}】\n${doc.text}`)
         .join("\n\n---\n\n");
       
-      // 3. 超シンプルなプロンプト
-      const analysisPrompt = `企業名と金額を抽出して比較。JSONで返答: {"match": "yes/no", "companies": [{"name": "企業名", "amount": 数値}]}
+      // 3. プロンプト（申込者企業を除外）
+      const analysisPrompt = `請求書から第三債務者（請求先企業）の企業名と金額を抽出してください。
 
-OCR: ${combinedText.substring(0, 500)}
-Kintone: ${kintoneData.purchases.map(p => `${p.company}=${p.amount}`).join(', ')}`;
+【重要】申込者企業（${kintoneData.applicant}）は第三債務者として抽出しないでください。
+
+OCRテキスト:
+${combinedText.substring(0, 3000)}
+
+Kintone登録データ（第三債務者）:
+${kintoneData.purchases.map((p: any) => `${p.company}: ¥${p.amount.toLocaleString()}`).join('\n')}
+
+以下のJSON形式で返答してください:
+{
+  "match": "yes" または "no" または "partial",
+  "companies": [
+    {"name": "第三債務者の企業名", "amount": 金額（数値）}
+  ]
+}
+
+注意: 申込者企業（${kintoneData.applicant}）は除外してください。`;
 
       console.log(`[購入検証-最小] AI分析開始`);
       const startTime = Date.now();
       
       const result = await generateText({
-        model: anthropic(model),
+        model: openai(model),
         prompt: analysisPrompt,
         temperature: 0,
       });
@@ -124,14 +105,15 @@ Kintone: ${kintoneData.purchases.map(p => `${p.company}=${p.amount}`).join(', ')
       console.log(`[購入検証-最小] AI分析完了 - 処理時間: ${analysisTime}ms`);
       
       // 4. 結果の解析（超シンプル）
-      let match = "no";
+      let match: "yes" | "no" | "partial" = "no";
       let companies: any[] = [];
       
       try {
         const jsonMatch = result.text?.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          match = parsed.match || "no";
+          const matchValue = parsed.match || "no";
+          match = (matchValue === "yes" || matchValue === "partial") ? matchValue : "no";
           companies = parsed.companies || [];
         }
       } catch (e) {}
@@ -139,72 +121,28 @@ Kintone: ${kintoneData.purchases.map(p => `${p.company}=${p.amount}`).join(', ')
       // 5. コスト計算
       const ocrCost = purchaseDocuments.reduce((sum, doc) => 
         sum + (doc.pageCount * 0.0015), 0);
-      const analysisCost = 0.003;
       
-      // 6. 結果を返す（必要最小限のデータ）
+      // 実際の使用トークン数からコスト計算
+      const inputTokens = result.usage?.totalTokens || 0;
+      const outputTokens = result.usage?.totalTokens || 0;
+      const analysisCost = (inputTokens * 0.000003) + (outputTokens * 0.000015);
+      
+      // 6. 結果を返す（照合結果のみ）
+      const verificationResult = match === "yes" ? "一致" as const : match === "partial" ? "部分一致" as const : "不一致" as const;
+
+      console.log(`[購入検証-最小] 完了 - 照合結果: ${verificationResult}`);
+
       return {
         success: true,
-        summary: `照合結果: ${match === "yes" ? "一致" : match === "partial" ? "部分一致" : "不一致"}`,
-        metadata: {
-          recordId,
-          documentCount: purchaseDocuments.length,
-          verificationResults: {
-            総合評価: match === "yes" ? "一致" : match === "partial" ? "部分一致" : "不一致",
-            詳細: [],
-          },
-        },
-        purchaseInfo: {
-          totalAmount: kintoneData.totalAmount,
-          debtorCompanies: companies.map((c: any) => ({
-            name: c.name || "",
-            amount: c.amount || 0,
-            dueDate: "",
-            invoiceNumber: "",
-          })),
-          paymentTerms: "",
-          applicantCompany: kintoneData.applicant,
-        },
-        analysisDetails: {
-          extractedText: combinedText.substring(0, 200) + "...",
-          keyFindings: [],
-          confidence: 0.9,
-        },
-        costInfo: {
-          ocrCost,
-          analysisCost,
-          totalCost: ocrCost + analysisCost,
-        },
+        verificationResult,
       };
       
     } catch (error: any) {
       console.error("[購入検証-最小] エラー:", error.message);
-      
+
       return {
         success: false,
-        summary: `エラー: ${error.message}`,
-        metadata: {
-          recordId,
-          documentCount: purchaseDocuments.length,
-          verificationResults: {
-            総合評価: "不一致" as const,
-            詳細: [],
-          },
-        },
-        purchaseInfo: {
-          totalAmount: 0,
-          debtorCompanies: [],
-          applicantCompany: "",
-        },
-        analysisDetails: {
-          extractedText: "",
-          keyFindings: [error.message],
-          confidence: 0,
-        },
-        costInfo: {
-          ocrCost: 0,
-          analysisCost: 0,
-          totalCost: 0,
-        },
+        verificationResult: "不一致" as const,
       };
     }
   },

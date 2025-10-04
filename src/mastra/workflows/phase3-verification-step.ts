@@ -7,7 +7,7 @@ import axios from "axios";
 import { googleVisionIdentityOcrTool } from "../tools/google-vision-identity-ocr-tool";
 import { identityVerificationTool } from "../tools/identity-verification-tool";
 import { egoSearchTool } from "../tools/ego-search-tool";
-import { companyVerifyTool } from "../tools/company-verify-tool";
+import { companyVerifyBatchTool } from "../tools/company-verify-batch-tool";
 
 /**
  * Phase 3: 本人確認・企業実在性確認ステップ
@@ -24,15 +24,25 @@ export const phase3VerificationStep = createStep({
   
   outputSchema: z.object({
     recordId: z.string(),
-    結果サマリー: z.object({
+    phase3Results: z.object({
       本人確認: z.object({
         書類タイプ: z.string(),
         照合結果: z.string(),
-        抽出情報: z.object({
+        検出人数: z.number(),
+        一致人数: z.number(),
+        一致人物: z.object({
           氏名: z.string(),
           生年月日: z.string(),
           住所: z.string(),
-        }),
+        }).optional(),
+        会社情報: z.object({
+          会社名: z.string(),
+          会社名照合: z.string(),
+          資本金: z.string(),
+          設立年月日: z.string(),
+          代表者名: z.string(),
+          本店所在地: z.string(),
+        }).optional(),
       }),
       申込者エゴサーチ: z.object({
         ネガティブ情報: z.boolean(),
@@ -42,45 +52,46 @@ export const phase3VerificationStep = createStep({
       }),
       企業実在性: z.object({
         申込企業: z.object({
-          確認: z.boolean().optional(),
-          公式サイト: z.string().optional(),
+          企業名: z.string(),
+          公式サイト: z.string(),
+          信頼度: z.number(),
         }).optional(),
         買取企業: z.object({
+          総数: z.number(),
           確認済み: z.number(),
           未確認: z.number(),
+          企業リスト: z.array(z.object({
+            企業名: z.string(),
+            公式サイト: z.string(),
+            信頼度: z.number(),
+          })),
         }),
         担保企業: z.object({
+          総数: z.number(),
           確認済み: z.number(),
           未確認: z.number(),
           備考: z.string().optional(),
+          企業リスト: z.array(z.object({
+            企業名: z.string(),
+            公式サイト: z.string(),
+            信頼度: z.number(),
+          })),
         }),
       }),
       代表者リスク: z.object({
         検索対象: z.number(),
         リスク検出: z.number(),
+        リスク詳細: z.array(z.object({
+          氏名: z.string(),
+          会社: z.string(),
+          企業種別: z.string(),
+          ネガティブ情報: z.boolean(),
+          詐欺情報サイト: z.number(),
+          Web検索: z.number(),
+        })).optional(),
       }),
       処理時間: z.string(),
     }),
-    phase3Results: z.object({
-      identityVerification: z.object({
-        success: z.boolean(),
-        extractedInfo: z.any(),
-        documentType: z.string(),
-        summary: z.string(),
-      }),
-      applicantEgoSearch: z.object({
-        fraudSiteResults: z.array(z.any()),
-        negativeSearchResults: z.array(z.any()),
-        summary: z.any(),
-      }),
-      companyVerification: z.object({
-        applicantCompany: z.any().optional(),
-        purchaseCompanies: z.array(z.any()).optional(),
-        collateralCompanies: z.array(z.any()).optional(),
-      }),
-      representativeEgoSearches: z.array(z.any()),
-    }),
-    summary: z.string(),
   }),
   
   execute: async ({ inputData }) => {
@@ -98,7 +109,7 @@ export const phase3VerificationStep = createStep({
     // ========================================
     console.log(`\n━━━ Step 1-1: Google Vision OCR処理 ━━━`);
     const ocrStartTime = Date.now();
-    
+
     const ocrResult = await googleVisionIdentityOcrTool.execute!({
       context: {
         recordId,
@@ -107,73 +118,105 @@ export const phase3VerificationStep = createStep({
       },
       runtimeContext: new RuntimeContext(),
     });
-    
+
     const ocrDuration = Date.now() - ocrStartTime;
     console.log(`OCR処理完了 - 処理時間: ${ocrDuration}ms`);
     console.log(`  - 本人確認書類: ${ocrResult.identityDocuments.length}件`);
     console.log(`  - 総ページ数: ${ocrResult.processingDetails.totalPages}ページ`);
-    
+
+    let identityResult: any = null;
+
     if (ocrResult.identityDocuments.length > 0) {
       console.log(`\n【本人確認書類】`);
       ocrResult.identityDocuments.forEach((doc, index) => {
         console.log(`  📄 ${doc.fileName} (${doc.pageCount}ページ)`);
         console.log(`     先頭: "${doc.text.substring(0, 50).replace(/\n/g, ' ')}..."`);
       });
-    } else {
-      console.log(`\n【本人確認書類】 ⚠️ ファイルなし`);
-    }
-    
-    if (!ocrResult.success) {
-      throw new Error(`OCR処理失敗: ${ocrResult.error}`);
-    }
-    
-    // ========================================
-    // Step 1-2: 本人確認検証（AI分析 + 照合）
-    // ========================================
-    console.log(`\n━━━ Step 1-2: 本人確認検証 ━━━`);
-    const verificationStartTime = Date.now();
-    
-    const identityResult = await identityVerificationTool.execute!({
-      context: {
-        recordId,
-        identityDocuments: ocrResult.identityDocuments,
-        model: "gpt-4o",
-      },
-      runtimeContext: new RuntimeContext(),
-    });
-    
-    const verificationDuration = Date.now() - verificationStartTime;
-    console.log(`本人確認検証完了 - 処理時間: ${verificationDuration}ms`);
-    
-    console.log(`\n【書類タイプ】`);
-    console.log(`  ${identityResult.documentType}`);
-    
-    if (identityResult.success) {
-      console.log(`\n【抽出情報】`);
-      console.log(`  氏名: ${identityResult.extractedInfo.name || "不明"}`);
-      console.log(`  生年月日: ${identityResult.extractedInfo.birthDate || "不明"}`);
-      console.log(`  住所: ${identityResult.extractedInfo.address || "不明"}（照合対象外）`);
 
-      console.log(`\n【Kintone照合】`);
-      console.log(`  ${identityResult.verificationResults.nameMatch ? "✓" : "✗"} 氏名: ${identityResult.verificationResults.nameMatch ? "一致" : "不一致"}`);
-      console.log(`  ${identityResult.verificationResults.birthDateMatch ? "✓" : "✗"} 生年月日: ${identityResult.verificationResults.birthDateMatch ? "一致" : "不一致"}`);
-      console.log(`\n  判定: ${identityResult.verificationResults.summary}`);
+      // ========================================
+      // Step 1-2: 本人確認検証（AI分析 + 照合）
+      // ========================================
+      console.log(`\n━━━ Step 1-2: 本人確認検証 ━━━`);
+      const verificationStartTime = Date.now();
+
+      identityResult = await identityVerificationTool.execute!({
+        context: {
+          recordId,
+          identityDocuments: ocrResult.identityDocuments,
+          model: "gpt-4o",
+        },
+        runtimeContext: new RuntimeContext(),
+      });
+
+      const verificationDuration = Date.now() - verificationStartTime;
+      console.log(`本人確認検証完了 - 処理時間: ${verificationDuration}ms`);
+
+      console.log(`\n【書類タイプ】`);
+      console.log(`  ${identityResult.documentType}`);
+
+      console.log(`\n【検出結果】`);
+      console.log(`  検出人数: ${identityResult.verificationResults?.personCount || 0}人`);
+      console.log(`  一致人数: ${identityResult.verificationResults?.matchedPersonCount || 0}人`);
+
+      if (identityResult.persons && identityResult.persons.length > 0) {
+        console.log(`\n【検出された人物】`);
+        identityResult.persons.forEach((person: any, idx: number) => {
+          if (person && person.name) {
+            const icon = person.nameMatch && person.birthDateMatch ? "✓" : "✗";
+            console.log(`  ${icon} ${idx + 1}. ${person.name}`);
+            console.log(`     生年月日: ${person.birthDate || "不明"}`);
+            console.log(`     住所: ${person.address || "不明"}`);
+            console.log(`     判定: 氏名${person.nameMatch ? "○" : "×"} / 生年月日${person.birthDateMatch ? "○" : "×"}`);
+          }
+        });
+      } else {
+        console.log(`\n⚠️  人物情報が検出されませんでした`);
+      }
+
+      if (identityResult.matchedPerson && identityResult.matchedPerson.name) {
+        console.log(`\n【一致した人物】`);
+        console.log(`  ✓ 氏名: ${identityResult.matchedPerson.name}`);
+        console.log(`  ✓ 生年月日: ${identityResult.matchedPerson.birthDate || "不明"}`);
+        console.log(`  ✓ 住所: ${identityResult.matchedPerson.address || "不明"}（参考情報）`);
+      } else {
+        console.log(`\n⚠️  一致する人物が見つかりませんでした`);
+      }
+
+      if (identityResult.companyInfo && identityResult.companyInfo.companyName) {
+        console.log(`\n【会社情報】`);
+        console.log(`  会社名: ${identityResult.companyInfo.companyName}`);
+        console.log(`  照合: ${identityResult.companyInfo.companyNameMatch ? "✓ 一致" : "✗ 不一致"}`);
+        if (identityResult.companyInfo.capital) console.log(`  資本金: ${identityResult.companyInfo.capital}`);
+        if (identityResult.companyInfo.established) console.log(`  設立: ${identityResult.companyInfo.established}`);
+        if (identityResult.companyInfo.representative) console.log(`  代表者: ${identityResult.companyInfo.representative}`);
+        if (identityResult.companyInfo.location) console.log(`  本店: ${identityResult.companyInfo.location}`);
+      } else {
+        console.log(`\n  会社情報: なし`);
+      }
+
+      console.log(`\n【最終判定】`);
+      console.log(`  ${identityResult.verificationResults?.summary || identityResult.summary}`);
     } else {
-      console.log(`\n⚠️  本人確認書類の処理に失敗しました`);
-      console.log(`  理由: ${identityResult.summary}`);
+      console.log(`\n【本人確認書類】 ⚠️ ファイルなし - 本人確認検証をスキップします`);
     }
     
     // ========================================
     // Step 2: 申込者のエゴサーチ
     // ========================================
     console.log(`\n━━━ Step 2: 申込者のエゴサーチ ━━━`);
-    
+
     const applicantEgoSearch = await egoSearchTool.execute!({
       context: { recordId },
       runtimeContext: new RuntimeContext(),
     });
-    
-    console.log(`\n対象: ${identityResult.processingDetails.expectedName || "不明"}（生年月日: ${identityResult.processingDetails.expectedBirthDate || "不明"}）`);
+
+    if (identityResult) {
+      console.log(`\n対象: ${identityResult.processingDetails.expectedName || "不明"}（生年月日: ${identityResult.processingDetails.expectedBirthDate || "不明"}）`);
+    } else {
+      // Kintoneから申込者情報を取得して表示
+      const applicantName = await fetchApplicantNameFromKintone(recordId);
+      console.log(`\n対象: ${applicantName || "不明"}（本人確認書類なし - Kintone情報から検索）`);
+    }
     
     console.log(`\n【詐欺情報サイト】`);
     for (const result of applicantEgoSearch.fraudSiteResults) {
@@ -188,31 +231,38 @@ export const phase3VerificationStep = createStep({
     }
     
     console.log(`\n【Web検索】`);
-    
-    // GPT-4.1でAI判定を行う
+
+    // 申込者名を取得（本人確認結果 or Kintone）
+    const searchTargetName = identityResult
+      ? identityResult.processingDetails.expectedName
+      : await fetchApplicantNameFromKintone(recordId);
+
+    // GPT-4.1でAI判定を行う（1クエリにつき1回のAPI呼び出し）
     const filteredNegativeResults = [];
     for (const result of applicantEgoSearch.negativeSearchResults) {
       if (result.found && result.results && result.results.length > 0) {
         console.log(`\n  "${result.query}": ${result.results.length}件の検索結果を分析中...`);
-        
-        // 各検索結果をAIで判定
-        const relevantResults = [];
-        for (const searchResult of result.results) {
-          const isRelevant = await analyzeSearchResultRelevance(
-            identityResult.processingDetails.expectedName,
-            result.query,
-            searchResult.title,
-            searchResult.snippet
-          );
-          
-          if (isRelevant.isRelevant) {
-            relevantResults.push({
-              ...searchResult,
-              aiReason: isRelevant.reason,
-            });
-          }
-        }
-        
+
+        // 全検索結果を1回のAPI呼び出しで判定
+        const analysisResult = await analyzeSearchResultsRelevance(
+          searchTargetName,
+          result.query,
+          result.results
+        );
+
+        const relevantResults = result.results
+          .map((searchResult: any, idx: number) => {
+            const analysis = analysisResult.results.find((r: any) => r.index === idx);
+            if (analysis && analysis.isRelevant) {
+              return {
+                ...searchResult,
+                aiReason: analysis.reason,
+              };
+            }
+            return null;
+          })
+          .filter((r: any) => r !== null);
+
         if (relevantResults.length > 0) {
           console.log(`  ⚠️ "${result.query}": ${relevantResults.length}件検出（AI判定済み）`);
           relevantResults.slice(0, 2).forEach((r, idx) => {
@@ -274,92 +324,91 @@ export const phase3VerificationStep = createStep({
     }
     
     // ========================================
-    // Step 3: 企業実在性確認（並列実行）
+    // Step 3: 企業実在性確認（一括検証）
     // ========================================
     console.log(`\n━━━ Step 3: 企業実在性確認 ━━━`);
 
-    let applicantCompany: any = undefined;
-    let purchaseCompanyResults: any[] = [];
-    let collateralCompanyResults: any[] = [];
+    // 全企業情報を収集
+    const allCompanies: Array<{ name: string; type: "申込企業" | "買取企業" | "担保企業"; location?: string }> = [];
 
-    // 申込企業の検証（Kintoneから直接取得）
+    // 申込企業
     console.log(`\n【申込企業】`);
-    const applicantCompanyName = await fetchApplicantCompanyFromKintone(recordId);
-
-    if (applicantCompanyName) {
-      console.log(`  企業名: ${applicantCompanyName}`);
-
-      applicantCompany = await companyVerifyTool.execute!({
-        context: {
-          companyName: applicantCompanyName,
-          location: undefined,
-        },
-        runtimeContext: new RuntimeContext(),
+    const applicantInfo = await fetchApplicantCompanyFromKintone(recordId);
+    if (applicantInfo.companyName) {
+      console.log(`  企業名: ${applicantInfo.companyName}`);
+      if (applicantInfo.location) {
+        console.log(`  所在地: ${applicantInfo.location}`);
+      }
+      allCompanies.push({
+        name: applicantInfo.companyName,
+        type: "申込企業",
+        location: applicantInfo.location,
       });
-
-      printCompanyVerificationResult(applicantCompany, applicantCompanyName);
     } else {
       console.log(`  ⚠️ 申込企業名が取得できませんでした（屋号・会社名フィールドが空）`);
     }
 
-    // 買取企業の検証（複数）- Phase 1の結果がある場合のみ
+    // 買取企業
     if (phase1Results?.purchaseVerification?.purchaseInfo?.debtorCompanies?.length > 0) {
       console.log(`\n【買取企業】`);
-
       const purchaseInfo = phase1Results.purchaseVerification.purchaseInfo;
-
-      purchaseCompanyResults = await Promise.all(
-        purchaseInfo.debtorCompanies.map(async (company: any) => {
-          console.log(`\n  企業名: ${company.name}`);
-
-          const result = await companyVerifyTool.execute!({
-            context: {
-              companyName: company.name,
-              location: "建設業", // 業種で検索精度向上
-            },
-            runtimeContext: new RuntimeContext(),
-          });
-
-          printCompanyVerificationResult(result, company.name);
-
-          return result;
-        })
-      );
+      purchaseInfo.debtorCompanies.forEach((company: any) => {
+        console.log(`  企業名: ${company.name}`);
+        allCompanies.push({
+          name: company.name,
+          type: "買取企業",
+          location: undefined,
+        });
+      });
     } else {
       console.log(`\n【買取企業】`);
       console.log(`  ⚠️ Phase 1の結果がないため、買取企業情報を取得できません`);
     }
-    
-    // 担保企業の検証（Kintoneから必ず取得）
+
+    // 担保企業
     console.log(`\n【担保企業】`);
     console.log(`  担保情報テーブルから企業名を取得中...`);
-
     const collateralCompanies = await fetchCollateralCompaniesFromKintone(recordId);
-
     if (collateralCompanies.length > 0) {
       console.log(`  取得: ${collateralCompanies.length}社`);
-
-      collateralCompanyResults = await Promise.all(
-        collateralCompanies.map(async (company: any) => {
-          console.log(`\n  企業名: ${company.name}`);
-
-          const result = await companyVerifyTool.execute!({
-            context: {
-              companyName: company.name,
-              location: undefined, // Kintoneの担保情報テーブルには所在地がない
-              registryInfo: undefined, // 代表者情報は謄本からのみ取得
-            },
-            runtimeContext: new RuntimeContext(),
-          });
-
-          printCompanyVerificationResult(result, company.name);
-
-          // 企業名も結果に含める
-          return { ...result, companyName: company.name };
-        })
-      );
+      collateralCompanies.forEach((company: any) => {
+        console.log(`  企業名: ${company.name}`);
+        allCompanies.push({
+          name: company.name,
+          type: "担保企業",
+          location: undefined,
+        });
+      });
     } else {
       console.log(`  ⚠️ 担保企業情報なし（担保テーブルが空）`);
+    }
+
+    // 全企業を一括検証（1回のAI呼び出し）
+    console.log(`\n全${allCompanies.length}社を一括検証中...`);
+    const batchResult = await companyVerifyBatchTool.execute!({
+      context: { companies: allCompanies },
+      runtimeContext: new RuntimeContext(),
+    });
+
+    // 結果を種別ごとに分類
+    const applicantCompany = batchResult.results.find(r => r.companyType === "申込企業");
+    const purchaseCompanyResults = batchResult.results.filter(r => r.companyType === "買取企業");
+    const collateralCompanyResults = batchResult.results.filter(r => r.companyType === "担保企業");
+
+    // 結果を表示
+    if (applicantCompany) {
+      console.log(`\n【申込企業】`);
+      printCompanyVerificationResultSimple(applicantCompany);
+    }
+
+    if (purchaseCompanyResults.length > 0) {
+      console.log(`\n【買取企業】`);
+      purchaseCompanyResults.forEach(r => printCompanyVerificationResultSimple(r));
+    }
+
+    if (collateralCompanyResults.length > 0) {
+      console.log(`\n【担保企業】`);
+      collateralCompanyResults.forEach(r => printCompanyVerificationResultSimple(r));
     }
     
     // ========================================
@@ -369,18 +418,9 @@ export const phase3VerificationStep = createStep({
     console.log(`\n代表者情報はPhase 1の担保検証結果（謄本）からのみ取得`);
     
     const representatives: Array<{ name: string; company: string; type: string }> = [];
-    
-    // 買取企業の代表者（企業検索結果から取得）
-    for (let i = 0; i < purchaseCompanyResults.length; i++) {
-      const result = purchaseCompanyResults[i];
-      if (result.webPresence?.companyDetails?.representative) {
-        representatives.push({
-          name: result.webPresence.companyDetails.representative,
-          company: phase1Results?.purchaseVerification?.purchaseInfo?.debtorCompanies?.[i]?.name || "不明",
-          type: "買取企業",
-        });
-      }
-    }
+
+    // 買取企業の代表者は取得しない（一括検証では代表者情報を抽出していないため）
+    // 代表者情報はPhase 1の担保検証結果（謄本）からのみ取得
     
     // 担保企業の代表者（Phase 1の担保検証結果からのみ取得）
     // 注意: 担保謄本ファイルがない場合、代表者情報は取得できない
@@ -456,25 +496,33 @@ export const phase3VerificationStep = createStep({
     console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     console.log(`✅ [Phase 3] 完了 (処理時間: ${processingTime}秒)`);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
-    
-    const summary = `Phase 3: 本人確認・企業実在性確認
-処理時間: ${processingTime}秒
-本人確認: ${identityResult.success ? "成功" : "失敗"}
-申込者エゴサーチ: ${applicantEgoSearch.summary.hasNegativeInfo ? "リスク検出" : "問題なし"}
-企業実在性確認: 申込企業=${applicantCompany ? "確認済み" : "未確認"}, 買取企業=${purchaseCompanyResults.length}社, 担保企業=${collateralCompanyResults.length}社
-代表者リスク: ${representativeEgoSearches.filter(r => r.egoSearchResult.summary.hasNegativeInfo).length}名/${representatives.length}名`;
-    
+
     // 本人確認のサマリー
-    const 本人確認サマリー = {
+    const 本人確認サマリー = identityResult ? {
       書類タイプ: identityResult.documentType,
-      照合結果: identityResult.verificationResults.summary,
-      抽出情報: {
-        氏名: identityResult.extractedInfo.name || "不明",
-        生年月日: identityResult.extractedInfo.birthDate || "不明",
-        住所: identityResult.extractedInfo.address || "不明",
-      },
+      照合結果: identityResult.verificationResults?.summary || identityResult.summary,
+      検出人数: identityResult.verificationResults?.personCount || 0,
+      一致人数: identityResult.verificationResults?.matchedPersonCount || 0,
+      一致人物: (identityResult.matchedPerson && identityResult.matchedPerson.name) ? {
+        氏名: identityResult.matchedPerson.name,
+        生年月日: identityResult.matchedPerson.birthDate || "不明",
+        住所: identityResult.matchedPerson.address || "不明",
+      } : undefined,
+      会社情報: (identityResult.companyInfo && identityResult.companyInfo.companyName) ? {
+        会社名: identityResult.companyInfo.companyName || "不明",
+        会社名照合: identityResult.companyInfo.companyNameMatch ? "✓ 一致" : "✗ 不一致",
+        資本金: identityResult.companyInfo.capital || "不明",
+        設立年月日: identityResult.companyInfo.established || "不明",
+        代表者名: identityResult.companyInfo.representative || "不明",
+        本店所在地: identityResult.companyInfo.location || "不明",
+      } : undefined,
+    } : {
+      書類タイプ: "なし",
+      照合結果: "本人確認書類が添付されていません",
+      検出人数: 0,
+      一致人数: 0,
     };
-    
+
     // 申込者エゴサーチのサマリー
     const 申込者エゴサーチサマリー = {
       ネガティブ情報: applicantEgoSearch.summary.hasNegativeInfo,
@@ -486,18 +534,15 @@ export const phase3VerificationStep = createStep({
     // 企業実在性のサマリー
     const 企業実在性サマリー = {
       申込企業: applicantCompany ? {
-        企業名: applicantCompanyName,
-        確認: applicantCompany.verified,
-        公式サイト: applicantCompany.webPresence.websiteUrl || "なし",
+        企業名: applicantCompany.companyName,
+        公式サイト: applicantCompany.websiteUrl || "なし",
         信頼度: applicantCompany.confidence,
-      } : applicantCompanyName ? {
-        企業名: applicantCompanyName,
-        確認: false,
-        公式サイト: "確認失敗",
+      } : applicantInfo.companyName ? {
+        企業名: applicantInfo.companyName,
+        公式サイト: "なし",
         信頼度: 0,
       } : {
         企業名: "取得失敗",
-        確認: false,
         公式サイト: "なし",
         信頼度: 0,
       },
@@ -505,10 +550,9 @@ export const phase3VerificationStep = createStep({
         総数: purchaseCompanyResults.length,
         確認済み: purchaseCompanyResults.filter((c: any) => c.verified).length,
         未確認: purchaseCompanyResults.filter((c: any) => !c.verified).length,
-        企業リスト: purchaseCompanyResults.map((c: any, idx: number) => ({
-          企業名: phase1Results?.purchaseVerification?.purchaseInfo?.debtorCompanies?.[idx]?.name || "不明",
-          確認: c.verified,
-          公式サイト: c.webPresence.websiteUrl || "なし",
+        企業リスト: purchaseCompanyResults.map((c: any) => ({
+          企業名: c.companyName,
+          公式サイト: c.websiteUrl || "なし",
           信頼度: c.confidence,
         })),
       },
@@ -517,54 +561,38 @@ export const phase3VerificationStep = createStep({
         確認済み: collateralCompanyResults.filter((c: any) => c.verified).length,
         未確認: collateralCompanyResults.filter((c: any) => !c.verified).length,
         備考: collateralCompanyResults.length === 0 ? "担保テーブルが空" : undefined,
-        企業リスト: collateralCompanyResults.map((c: any, idx: number) => {
-          const collateralCompanies = collateralCompanyResults.length > 0 ?
-            collateralCompanyResults : [];
-          return {
-            企業名: collateralCompanies[idx]?.companyName || "不明",
-            確認: c.verified,
-            公式サイト: c.webPresence.websiteUrl || "なし",
-            信頼度: c.confidence,
-          };
-        }),
+        企業リスト: collateralCompanyResults.map((c: any) => ({
+          企業名: c.companyName,
+          公式サイト: c.websiteUrl || "なし",
+          信頼度: c.confidence,
+        })),
       },
     };
     
     // 代表者リスクのサマリー
+    const riskyReps = representativeEgoSearches.filter((r: any) => r.egoSearchResult?.summary?.hasNegativeInfo);
     const 代表者リスクサマリー = {
       検索対象: representativeEgoSearches.length,
-      リスク検出: representativeEgoSearches.filter((r: any) => r.egoSearchResult?.summary?.hasNegativeInfo).length,
+      リスク検出: riskyReps.length,
+      リスク詳細: riskyReps.length > 0 ? riskyReps.map((r: any) => ({
+        氏名: r.name,
+        会社: r.company,
+        企業種別: r.type,
+        ネガティブ情報: r.egoSearchResult.summary.hasNegativeInfo,
+        詐欺情報サイト: r.egoSearchResult.fraudSiteResults.filter((f: any) => f.found).length,
+        Web検索: r.egoSearchResult.negativeSearchResults.filter((n: any) => n.found).length,
+      })) : undefined,
     };
-    
+
     return {
       recordId,
-      結果サマリー: {
+      phase3Results: {
         本人確認: 本人確認サマリー,
         申込者エゴサーチ: 申込者エゴサーチサマリー,
         企業実在性: 企業実在性サマリー,
         代表者リスク: 代表者リスクサマリー,
         処理時間: `${processingTime}秒`,
       },
-      phase3Results: {
-        identityVerification: {
-          success: identityResult.success,
-          extractedInfo: identityResult.extractedInfo,
-          documentType: identityResult.documentType,
-          summary: identityResult.summary,
-        },
-        applicantEgoSearch: {
-          fraudSiteResults: applicantEgoSearch.fraudSiteResults,
-          negativeSearchResults: applicantEgoSearch.negativeSearchResults,
-          summary: applicantEgoSearch.summary,
-        },
-        companyVerification: {
-          applicantCompany,
-          purchaseCompanies: purchaseCompanyResults,
-          collateralCompanies: collateralCompanyResults,
-        },
-        representativeEgoSearches,
-      },
-      summary,
     };
   },
 });
@@ -575,24 +603,27 @@ export const phase3VerificationStep = createStep({
 // ========================================
 
 /**
- * Web検索結果の関連性をAIで判定
+ * Web検索結果の関連性をAIで判定（複数の検索結果を1回で判定）
  */
-async function analyzeSearchResultRelevance(
+async function analyzeSearchResultsRelevance(
   name: string,
   query: string,
-  title: string,
-  snippet: string
-): Promise<{ isRelevant: boolean; reason: string }> {
+  searchResults: Array<{ title: string; snippet: string; url: string }>
+): Promise<{ results: Array<{ index: number; isRelevant: boolean; reason: string }> }> {
   try {
     const result = await generateObject({
       model: openai("gpt-4o"),
-      prompt: `以下のWeb検索結果のスニペットを分析し、
+      prompt: `以下のWeb検索結果を分析し、
 「${name}」に関する詐欺・被害・逮捕・容疑の情報が
-本当に含まれているか判定してください。
+本当に含まれているか、各結果について判定してください。
 
 検索クエリ: "${query}"
-タイトル: "${title}"
-スニペット: "${snippet}"
+
+【検索結果】
+${searchResults.map((r, i) => `
+${i}. タイトル: ${r.title}
+   スニペット: ${r.snippet}
+`).join('\n')}
 
 判定基準:
 - 本人が詐欺・被害・逮捕・容疑に関わっている場合: true
@@ -600,28 +631,34 @@ async function analyzeSearchResultRelevance(
 - 記念日、スポーツ、文化活動などの記事: false
 - PDFファイル名やメタデータのみの場合: false
 
-JSON形式で返してください。`,
+各検索結果についてJSON形式で返してください。`,
       schema: z.object({
-        isRelevant: z.boolean().describe("関連性があるか"),
-        reason: z.string().describe("判定理由（50文字以内）"),
+        results: z.array(z.object({
+          index: z.number().describe("検索結果のインデックス"),
+          isRelevant: z.boolean().describe("関連性があるか"),
+          reason: z.string().describe("判定理由（50文字以内）"),
+        })),
       }),
     });
-    
+
     return result.object;
   } catch (error) {
     console.error(`AI判定エラー:`, error);
-    // エラー時は安全側に倒して関連ありとする
+    // エラー時は安全側に倒して全て関連ありとする
     return {
-      isRelevant: true,
-      reason: "AI判定エラー（要手動確認）",
+      results: searchResults.map((_, idx) => ({
+        index: idx,
+        isRelevant: true,
+        reason: "AI判定エラー（要手動確認）",
+      })),
     };
   }
 }
 
 /**
- * Kintoneから申込企業名を取得
+ * Kintoneから申込者名を取得
  */
-async function fetchApplicantCompanyFromKintone(recordId: string): Promise<string> {
+async function fetchApplicantNameFromKintone(recordId: string): Promise<string> {
   const domain = process.env.KINTONE_DOMAIN;
   const apiToken = process.env.KINTONE_API_TOKEN;
   const appId = process.env.KINTONE_APP_ID || "37";
@@ -643,13 +680,51 @@ async function fetchApplicantCompanyFromKintone(recordId: string): Promise<strin
     }
 
     const record = response.data.records[0];
+    // 申込者氏名を取得
+    const applicantName = record.顧客情報＿氏名?.value || "";
+
+    return applicantName;
+  } catch (error) {
+    console.error("Kintone申込者情報取得エラー:", error);
+    return "";
+  }
+}
+
+/**
+ * Kintoneから申込企業名と所在地を取得
+ */
+async function fetchApplicantCompanyFromKintone(recordId: string): Promise<{ companyName: string; location: string | undefined }> {
+  const domain = process.env.KINTONE_DOMAIN;
+  const apiToken = process.env.KINTONE_API_TOKEN;
+  const appId = process.env.KINTONE_APP_ID || "37";
+
+  if (!domain || !apiToken) {
+    console.error("Kintone環境変数が設定されていません");
+    return { companyName: "", location: undefined };
+  }
+
+  try {
+    const url = `https://${domain}/k/v1/records.json?app=${appId}&query=$id="${recordId}"`;
+    const response = await axios.get(url, {
+      headers: { 'X-Cybozu-API-Token': apiToken },
+    });
+
+    if (response.data.records.length === 0) {
+      console.error(`レコードID: ${recordId} が見つかりません`);
+      return { companyName: "", location: undefined };
+    }
+
+    const record = response.data.records[0];
     // 屋号（個人事業主）または会社名（法人）を取得
     const companyName = record.屋号?.value || record.会社名?.value || "";
 
-    return companyName;
+    // 所在地を取得（企業所在地 → 自宅所在地の優先順位）
+    const location = record.本社所在地?.value || record.自宅所在地?.value || undefined;
+
+    return { companyName, location };
   } catch (error) {
     console.error("Kintone申込企業情報取得エラー:", error);
-    return "";
+    return { companyName: "", location: undefined };
   }
 }
 
@@ -706,42 +781,32 @@ function normalizeText(text: string): string {
 
 
 /**
- * 企業検証結果の表示
+ * 企業検証結果の表示（一括検証用）
  */
-function printCompanyVerificationResult(result: any, companyName: string): void {
+function printCompanyVerificationResultSimple(result: any): void {
   if (result.verified) {
-    console.log(`  ✓ ${companyName}: 実在確認`);
-    if (result.webPresence.hasWebsite) {
-      console.log(`     公式サイト: ${result.webPresence.websiteUrl}`);
+    console.log(`  ✓ ${result.companyName}: 実在確認`);
+    if (result.websiteUrl) {
+      console.log(`     公式サイト: ${result.websiteUrl}`);
     }
     console.log(`     信頼度: ${result.confidence}%`);
-    
-    if (result.webPresence.companyDetails) {
-      const details = result.webPresence.companyDetails;
-      if (details.businessDescription) {
-        console.log(`     事業内容: ${details.businessDescription}`);
-      }
-      if (details.capital) {
-        console.log(`     資本金: ${details.capital}`);
-      }
-      if (details.established) {
-        console.log(`     設立: ${details.established}`);
-      }
+
+    if (result.businessDescription) {
+      console.log(`     事業内容: ${result.businessDescription}`);
+    }
+    if (result.capital) {
+      console.log(`     資本金: ${result.capital}`);
+    }
+    if (result.established) {
+      console.log(`     設立: ${result.established}`);
     }
   } else {
-    console.log(`  ⚠️ ${companyName}: 確認不十分`);
+    console.log(`  ⚠️ ${result.companyName}: 確認不十分`);
     console.log(`     信頼度: ${result.confidence}%`);
-    if (result.webPresence.hasWebsite) {
-      console.log(`     検索結果: ${result.searchResults.length}件`);
+    if (result.websiteUrl) {
+      console.log(`     公式サイト: ${result.websiteUrl}`);
     } else {
       console.log(`     公式サイト: なし`);
-    }
-    
-    if (result.riskFactors.length > 0) {
-      console.log(`     リスク要因:`);
-      result.riskFactors.forEach((factor: string) => {
-        console.log(`       - ${factor}`);
-      });
     }
   }
 }

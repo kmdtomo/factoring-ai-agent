@@ -10,6 +10,7 @@ import { agentBasedComplianceWorkflow } from './workflows/agent-based-compliance
 import { phase1PurchaseCollateralWorkflow } from './workflows/phase1-purchase-collateral-workflow';
 import { phase2BankStatementWorkflow } from './workflows/phase2-bank-statement-workflow';
 import { phase3VerificationWorkflow } from './workflows/phase3-verification-workflow';
+import { phase4FinalAnalysisWorkflow } from './workflows/phase4-final-analysis-workflow';
 import { complianceAgent } from './agents/compliance-agent';
 import { complianceAgentV2 } from './agents/compliance-agent-v2';
 import { simpleComplianceAgent } from './agents/simple-compliance-agent';
@@ -36,6 +37,7 @@ export const mastra = new Mastra({
     phase1PurchaseCollateralWorkflow, // ← Phase 1：エージェントレス設計（推奨）
     phase2BankStatementWorkflow,      // ← Phase 2：通帳分析（NEW）
     phase3VerificationWorkflow,       // ← Phase 3：本人確認・企業実在性確認（NEW）
+    phase4FinalAnalysisWorkflow,      // ← Phase 4：最終分析・レポート生成（NEW）
   },
   agents: { 
     // complianceAgentV2,         // ワークフロー完成により一時無効化
