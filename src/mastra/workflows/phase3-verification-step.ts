@@ -20,10 +20,13 @@ export const phase3VerificationStep = createStep({
   inputSchema: z.object({
     recordId: z.string().describe("KintoneレコードID"),
     phase1Results: z.any().optional().describe("Phase 1の結果（買取・担保情報）"),
+    phase2Results: z.any().optional().describe("Phase 2の結果（通帳分析）"),
   }),
   
   outputSchema: z.object({
     recordId: z.string(),
+    phase1Results: z.any().optional().describe("Phase 1の結果（引き継ぎ）"),
+    phase2Results: z.any().optional().describe("Phase 2の結果（引き継ぎ）"),
     phase3Results: z.object({
       本人確認: z.object({
         書類タイプ: z.string(),
@@ -95,7 +98,7 @@ export const phase3VerificationStep = createStep({
   }),
   
   execute: async ({ inputData }) => {
-    const { recordId, phase1Results } = inputData;
+    const { recordId, phase1Results, phase2Results } = inputData;
     
     const startTime = Date.now();
     
@@ -586,6 +589,8 @@ export const phase3VerificationStep = createStep({
 
     return {
       recordId,
+      phase1Results, // Phase 1の結果を引き継ぎ
+      phase2Results, // Phase 2の結果を引き継ぎ
       phase3Results: {
         本人確認: 本人確認サマリー,
         申込者エゴサーチ: 申込者エゴサーチサマリー,

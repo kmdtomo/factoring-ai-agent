@@ -30,6 +30,7 @@ export const phase2BankStatementStep = createStep({
   
   outputSchema: z.object({
     recordId: z.string(),
+    phase1Results: z.any().optional().describe("Phase 1の結果（引き継ぎ）"),
     phase2Results: z.object({
       mainBankAnalysis: z.object({
         collateralMatches: z.array(z.object({
@@ -780,6 +781,7 @@ JSON形式で出力してください。`;
       // 簡潔でわかりやすい出力構造
       return {
         recordId,
+        phase1Results, // Phase 1の結果を引き継ぎ
         phase2Results: {
           mainBankAnalysis: mainBankAnalysis ? {
             collateralMatches: mainBankAnalysis.collateralMatches.map((match: any) => ({

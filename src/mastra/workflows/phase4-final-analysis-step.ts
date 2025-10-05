@@ -22,7 +22,7 @@ export const phase4FinalAnalysisStep = createStep({
   
   inputSchema: z.object({
     recordId: z.string().describe("KintoneレコードID"),
-    phase1Results: z.any().describe("Phase 1の結果（買取・担保情報）"),
+    phase1Results: z.any().optional().describe("Phase 1の結果（買取・担保情報）"),
     phase2Results: z.any().optional().describe("Phase 2の結果（通帳分析）"),
     phase3Results: z.any().optional().describe("Phase 3の結果（本人確認・企業実在性）"),
   }),
@@ -91,8 +91,9 @@ export const phase4FinalAnalysisStep = createStep({
       const record = recordResponse.data.records[0];
       
       // 基本情報
-      const 氏名 = record.顧客情報＿氏名?.value || "";
-      const 生年月日 = record.生年月日?.value || "";
+      // Phase 3の結果から取得、なければKintoneから取得
+      const 氏名 = phase3Results?.phase3Results?.本人確認?.一致人物?.氏名 || record.顧客情報＿氏名?.value || "";
+      const 生年月日 = phase3Results?.phase3Results?.本人確認?.一致人物?.生年月日 || record.生年月日?.value || "";
       const 屋号 = record.屋号?.value || "";
       const 会社名 = record.会社名?.value || "";
       const 申込企業 = 会社名 || 屋号 || "不明";
@@ -177,7 +178,7 @@ export const phase4FinalAnalysisStep = createStep({
       // ========================================
       console.log(`\n[Phase 4 - Step 3/4] AIによる総合評価（GPT-4.1）`);
       const aiStartTime = Date.now();
-      
+
       const evaluationPrompt = buildEvaluationPrompt(
         回収可能性評価,
         担保の安定性評価,
@@ -186,20 +187,23 @@ export const phase4FinalAnalysisStep = createStep({
         kintoneData
       );
       
+      console.log(`\n[DEBUG] プロンプト長: ${evaluationPrompt.length}文字`);
+      console.log(`[DEBUG] AI評価開始...`);
+      
       const aiResult = await generateObject({
-        model: openai("gpt-4o-2024-08-06"),
+        model: openai("gpt-4.1-2025-04-14"),
         prompt: evaluationPrompt,
         schema: z.object({
           最終判定: z.enum(["承諾", "リスクあり承諾", "否認"]),
           リスクレベル: z.enum(["低リスク", "中リスク", "高リスク"]),
-          総評: z.string().describe("6つのセクション構成（回収可能性、担保安定性、買取真正性、申込者信頼性、リスク要因、結論）"),
+          総評: z.string().describe("6つのセクション構成（回収可能性、担保安定性、買取真正性、申込者信頼性、リスク要因、結論）。必ず日本語で記述してください。"),
           推奨事項: z.array(z.object({
             対応策: z.string(),
             優先度: z.enum(["高", "中", "低"]),
             理由: z.string(),
             期待効果: z.string(),
-          })),
-          留意事項: z.array(z.string()),
+          })).min(1).describe("最低1つの推奨事項を必ず提示してください"),
+          留意事項: z.array(z.string()).min(0).describe("留意事項がない場合は空配列"),
         }),
         temperature: 0.3,
       });
@@ -339,14 +343,15 @@ function integrateRecoverability(phase1: any, phase3: any, kintone: any): any {
   const 掛目 = kintone.総債権額 > 0 ? ((買取額 / kintone.総債権額) * 100).toFixed(1) : "0.0";
   
   // 買取情報の真正性
-  const purchaseVerification = phase1?.phase1Results?.purchaseVerification;
-  const OCR照合 = purchaseVerification?.metadata?.verificationResults?.総合評価 === "一致" ? "✓ 完全一致" : "✗ 不一致";
-  
+  const purchaseVerification = phase1?.purchaseVerification;
+  const OCR照合 = purchaseVerification?.kintoneMatch === "一致" ? "✓ 完全一致" : "✗ 不一致";
+
   // 買取先企業の実在性
-  const 買取先企業 = phase3?.phase3Results?.companyVerification?.purchaseCompanies || [];
-  const 実在確認済み = 買取先企業.filter((c: any) => c.verified).length;
+  const companyVerification = phase3?.企業実在性;
+  const 買取先企業 = companyVerification?.買取企業?.企業リスト || [];
+  const 実在確認済み = companyVerification?.買取企業?.確認済み || 0;
   const 平均信頼度 = 買取先企業.length > 0
-    ? Math.round(買取先企業.reduce((sum: number, c: any) => sum + c.confidence, 0) / 買取先企業.length)
+    ? Math.round(買取先企業.reduce((sum: number, c: any) => sum + (c.信頼度 || 0), 0) / 買取先企業.length)
     : 0;
   
   return {
@@ -367,7 +372,9 @@ function integrateRecoverability(phase1: any, phase3: any, kintone: any): any {
       総数: 買取先企業.length,
       実在確認済み,
       平均信頼度,
-      評価: 実在確認済み === 買取先企業.length ? "✅ 全企業実在確認済み、債権回収可能性高い" : `⚠️ ${買取先企業.length - 実在確認済み}社未確認`,
+      評価: 買取先企業.length === 0 ? "⚠️ データなし（要確認）" : 
+            実在確認済み === 買取先企業.length ? "✅ 全企業実在確認済み、債権回収可能性高い" : 
+            `⚠️ ${買取先企業.length - 実在確認済み}社未確認`,
     },
   };
 }
@@ -382,9 +389,9 @@ function integrateCollateralStability(phase1: any, phase2: any, phase3: any, kin
   let 過去3ヶ月連続入金 = 0;
   let OCR一致企業 = 0;
   let OCR不一致企業 = 0;
-  
-  if (phase2?.phase2Results?.mainBankAnalysis?.collateralMatches) {
-    const matches = phase2.phase2Results.mainBankAnalysis.collateralMatches;
+
+  if (phase2?.mainBankAnalysis?.collateralMatches) {
+    const matches = phase2.mainBankAnalysis.collateralMatches;
     
     matches.forEach((match: any) => {
       // 3ヶ月連続入金チェック
@@ -404,14 +411,15 @@ function integrateCollateralStability(phase1: any, phase2: any, phase3: any, kin
   }
   
   // 担保企業の実在性と登記情報（Phase 1 + Phase 3）
-  const 担保企業リスト = phase3?.phase3Results?.companyVerification?.collateralCompanies || [];
-  const 実在確認済み = 担保企業リスト.filter((c: any) => c.verified).length;
+  const companyVerification = phase3?.企業実在性;
+  const 担保企業リスト = companyVerification?.担保企業?.企業リスト || [];
+  const 実在確認済み = companyVerification?.担保企業?.確認済み || 0;
   const 平均信頼度 = 担保企業リスト.length > 0
-    ? Math.round(担保企業リスト.reduce((sum: number, c: any) => sum + c.confidence, 0) / 担保企業リスト.length)
+    ? Math.round(担保企業リスト.reduce((sum: number, c: any) => sum + (c.信頼度 || 0), 0) / 担保企業リスト.length)
     : 0;
-  
+
   // 登記情報（Phase 1）
-  const 登記情報 = phase1?.phase1Results?.collateralVerification?.collateralInfo?.companies || [];
+  const 登記情報 = phase1?.collateralVerification?.collateralInfo?.companies || [];
   const 登記情報取得 = 登記情報.length;
   
   // 資本金・業歴の評価
@@ -419,7 +427,7 @@ function integrateCollateralStability(phase1: any, phase2: any, phase3: any, kin
   const 業歴評価結果 = evaluateEstablishedStats(登記情報);
   
   // 担保謄本の有無
-  const 担保謄本添付 = phase1?.phase1Results?.ocr?.collateralDocuments?.length || 0;
+  const 担保謄本添付 = phase1?.collateralDocuments?.length || 0;
   
   return {
     入金実績の安定性: {
@@ -451,36 +459,41 @@ function integrateCollateralStability(phase1: any, phase2: any, phase3: any, kin
  * 申込者信頼性評価の統合
  */
 function integrateApplicantReliability(phase3: any, kintone: any): any {
-  const identity = phase3?.phase3Results?.identityVerification;
-  const egoSearch = phase3?.phase3Results?.applicantEgoSearch;
-  const companyVerification = phase3?.phase3Results?.companyVerification;
+  // Phase 3の結果は日本語キーを使用
+  const identity = phase3?.本人確認;
+  const egoSearch = phase3?.申込者エゴサーチ;
+  const companyVerification = phase3?.企業実在性;
   
   // 飛ぶリスク評価
   const 飛ぶリスク = evaluateFlyRisk(kintone.年齢, kintone.事業形態, kintone.会社名);
   
+  // 本人確認書類の判定
+  const 書類あり = identity?.書類タイプ && identity?.書類タイプ !== "なし";
+  const 一致あり = identity?.一致人数 > 0;
+  
   return {
     本人確認と代表者照合: {
-      書類種別: identity?.documentType || "なし",
-      照合結果: identity?.verificationResults?.summary || identity?.summary || "未実施",
-      評価: identity?.success ? "✅ 本人確認完了、代表者一致" : "⚠️ 照合不一致または未実施",
+      書類種別: identity?.書類タイプ || "なし",
+      照合結果: identity?.照合結果 || "未実施",
+      評価: 書類あり && 一致あり ? "✅ 本人確認完了、代表者一致" : "⚠️ 照合不一致または未実施",
     },
     申込者属性_飛ぶリスク評価: 飛ぶリスク,
     申込企業の実在性: {
       企業名: kintone.申込企業,
-      実在確認: companyVerification?.applicantCompany?.verified ? "✓ 確認済み" : "✗ 未確認",
-      信頼度: companyVerification?.applicantCompany?.confidence || 0,
-      評価: companyVerification?.applicantCompany?.verified ? "✅ 企業実在確認済み" : "⚠️ 実在確認できず",
+      実在確認: companyVerification?.申込企業?.公式サイト ? "✓ 確認済み" : "✗ 未確認",
+      信頼度: companyVerification?.申込企業?.信頼度 || 0,
+      評価: companyVerification?.申込企業?.信頼度 > 0 ? "✅ 企業実在確認済み" : "⚠️ 実在確認できず",
     },
     ネガティブ情報: {
       申込者エゴサーチ: {
-        ネガティブ情報: egoSearch?.summary?.hasNegativeInfo || false,
-        詳細: egoSearch?.summary?.details || "なし",
-        評価: egoSearch?.summary?.hasNegativeInfo ? "⚠️ ネガティブ情報あり" : "✅ 問題なし",
+        ネガティブ情報: egoSearch?.ネガティブ情報 || false,
+        詳細: egoSearch?.詳細 || "なし",
+        評価: egoSearch?.ネガティブ情報 ? "⚠️ ネガティブ情報あり" : "✅ 問題なし",
       },
       代表者リスク: {
-        検索対象: phase3?.phase3Results?.representativeEgoSearches?.length || 0,
-        リスク検出: phase3?.phase3Results?.representativeEgoSearches?.filter((r: any) => r.egoSearchResult?.summary?.hasNegativeInfo).length || 0,
-        評価: phase3?.phase3Results?.representativeEgoSearches?.some((r: any) => r.egoSearchResult?.summary?.hasNegativeInfo) ? "⚠️ リスクあり" : "✅ 問題なし",
+        検索対象: phase3?.代表者リスク?.検索対象 || 0,
+        リスク検出: phase3?.代表者リスク?.リスク検出 || 0,
+        評価: (phase3?.代表者リスク?.リスク検出 || 0) > 0 ? "⚠️ リスクあり" : "✅ 問題なし",
       },
     },
   };
@@ -491,17 +504,17 @@ function integrateApplicantReliability(phase3: any, kintone: any): any {
  */
 function integrateRiskFactors(phase1: any, phase2: any, kintone: any): any {
   // 通帳リスク（Phase 2）
-  const ギャンブル = phase2?.phase2Results?.mainBankAnalysis?.riskDetection?.gambling || [];
-  const 他社ファクタリング = phase2?.phase2Results?.factoringCompaniesDetected || [];
-  const 大口出金 = phase2?.phase2Results?.mainBankAnalysis?.riskDetection?.largeCashWithdrawals || [];
-  
+  const ギャンブル = phase2?.mainBankAnalysis?.riskDetection?.gambling || [];
+  const 他社ファクタリング = phase2?.factoringCompanies || [];
+  const 大口出金 = phase2?.mainBankAnalysis?.riskDetection?.largeCashWithdrawals || [];
+
   // 登記情報リスク（Phase 1）
-  const 登記情報 = phase1?.phase1Results?.collateralVerification?.collateralInfo?.companies || [];
+  const 登記情報 = phase1?.collateralVerification?.collateralInfo?.companies || [];
   const 資本金リスク = 登記情報.filter((c: any) => c.capital && c.capital <= 2000000);
   const 業歴リスク = 登記情報.filter((c: any) => c.establishedDate && c.establishedDate.includes("令和"));
-  
+
   // 担保謄本
-  const 担保謄本添付 = phase1?.phase1Results?.ocr?.collateralDocuments?.length || 0;
+  const 担保謄本添付 = phase1?.collateralDocuments?.length || 0;
   
   return {
     通帳リスク: {
@@ -553,7 +566,7 @@ function evaluateCapitalStats(companies: any[]): any {
   return {
     平均資本金: `¥${average.toLocaleString()}`,
     良好_500万以上: 良好,
-    普通_300～500万: 普通,
+    普通_300から500万: 普通,
     弱い_200万以下: 弱い,
     総合評価: 良好 >= companies.length * 0.5 ? "✅ 良好" : 弱い > 0 ? `⚠️ ${弱い}社が弱い` : "普通",
   };

@@ -17,10 +17,13 @@ export const phase3VerificationWorkflow = createWorkflow({
   inputSchema: z.object({
     recordId: z.string().describe("KintoneレコードID"),
     phase1Results: z.any().optional().describe("Phase 1の結果（買取・担保情報）"),
+    phase2Results: z.any().optional().describe("Phase 2の結果（通帳分析）"),
   }),
   
   outputSchema: z.object({
     recordId: z.string(),
+    phase1Results: z.any().optional().describe("Phase 1の結果（引き継ぎ）"),
+    phase2Results: z.any().optional().describe("Phase 2の結果（引き継ぎ）"),
     結果サマリー: z.object({
       本人確認: z.object({
         書類タイプ: z.string(),
