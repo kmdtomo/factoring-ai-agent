@@ -1,7 +1,6 @@
 {
   "version": 2,
   "buildCommand": "pnpm run build",
-  "outputDirectory": ".mastra/output",
   "installCommand": "pnpm install",
   "framework": null,
   "rewrites": [
@@ -11,8 +10,7 @@
     }
   ],
   "functions": {
-    "api/index.js": {
-      "runtime": "nodejs20.x",
+    "api/**/*.js": {
       "maxDuration": 60
     }
   }
