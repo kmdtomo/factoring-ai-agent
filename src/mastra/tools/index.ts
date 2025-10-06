@@ -34,3 +34,6 @@ export { purchaseVerificationTool } from './purchase-verification-tool';
 export { purchaseVerificationToolMinimal } from './purchase-verification-tool-minimal';
 export { collateralVerificationTool } from './collateral-verification-tool';
 export { identityVerificationTool } from './identity-verification-tool';
+
+// Phase 4ツール
+export { kintonePhase4DataTool } from './kintone-phase4-data-tool';
