@@ -1,7 +1,7 @@
 import { createTool } from "@mastra/core";
 import { z } from "zod";
 import axios from "axios";
-import vision from '@google-cloud/vision';
+import { ImageAnnotatorClient } from '@google-cloud/vision';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -9,17 +9,23 @@ import { fileURLToPath } from 'url';
 const currentFileUrl = import.meta.url;
 const currentDirname = path.dirname(fileURLToPath(currentFileUrl));
 
-// 環境変数の認証ファイルパスが相対パスの場合、絶対パスに変換
-const authPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
-if (authPath && !path.isAbsolute(authPath)) {
-  // プロジェクトのルートディレクトリを基準に絶対パスを作成
-  const projectRoot = path.resolve(currentDirname, '../../../..');
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = path.resolve(projectRoot, authPath);
-}
+// Google Cloud認証設定
+let visionClient: ImageAnnotatorClient;
 
-// Google Vision クライアントの初期化
-// 警告を完全に抑制するため、環境変数を使用
-const visionClient = new vision.ImageAnnotatorClient();
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+  // JSON文字列から認証情報を読み込む（本番環境用）
+  const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+  visionClient = new ImageAnnotatorClient({ credentials });
+} else {
+  // ファイルパスから読み込む（ローカル環境用）
+  const authPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (authPath && !path.isAbsolute(authPath)) {
+    // プロジェクトのルートディレクトリを基準に絶対パスを作成
+    const projectRoot = path.resolve(currentDirname, '../../../..');
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = path.resolve(projectRoot, authPath);
+  }
+  visionClient = new ImageAnnotatorClient();
+}
 
 // 環境変数から設定を取得
 const KINTONE_DOMAIN = process.env.KINTONE_DOMAIN || "";
