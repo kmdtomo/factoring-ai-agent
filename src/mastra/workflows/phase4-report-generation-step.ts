@@ -21,10 +21,9 @@ export const phase4ReportGenerationStep = createStep({
   description: "Phase 1-3の結果とKintoneデータを統合し、AIによる審査レポートを生成",
 
   inputSchema: z.object({
-    recordId: z.string().describe("KintoneレコードID"),
-    phase1Results: z.any().optional().describe("Phase 1の結果（買取・担保情報）"),
-    phase2Results: z.any().optional().describe("Phase 2の結果（通帳分析）"),
-    phase3Results: z.any().optional().describe("Phase 3の結果（本人確認・企業実在性）"),
+    "phase1-purchase-collateral": z.any().optional().describe("Phase 1の結果（買取・担保情報）"),
+    "phase2-bank-statement": z.any().optional().describe("Phase 2の結果（通帳分析）"),
+    "phase3-verification": z.any().optional().describe("Phase 3の結果（本人確認・企業実在性）"),
   }),
 
   outputSchema: z.object({
@@ -42,7 +41,19 @@ export const phase4ReportGenerationStep = createStep({
 
   execute: async ({ inputData, runId }) => {
     const startTime = Date.now();
-    const { recordId, phase1Results, phase2Results, phase3Results } = inputData;
+
+    // 並列実行の結果を取得（各ステップIDでネームスペース化されている）
+    const phase1Data = inputData["phase1-purchase-collateral"];
+    const phase2Data = inputData["phase2-bank-statement"];
+    const phase3Data = inputData["phase3-verification"];
+
+    // recordIdは並列実行結果から取得（Phase 1から）
+    const recordId = phase1Data?.recordId || phase2Data?.recordId || phase3Data?.recordId;
+
+    // 実際のphaseResultsを抽出
+    const phase1Results = phase1Data?.phase1Results || phase1Data;
+    const phase2Results = phase2Data?.phase2Results || phase2Data;
+    const phase3Results = phase3Data?.phase3Results || phase3Data;
 
     console.log(`\n${"=".repeat(80)}`);
     console.log(`[Phase 4] 審査レポート生成開始 - recordId: ${recordId}`);
