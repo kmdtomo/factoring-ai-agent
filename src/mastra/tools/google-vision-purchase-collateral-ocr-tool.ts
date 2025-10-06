@@ -14,6 +14,8 @@ if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
   // JSON文字列から認証情報を読み込む（本番環境用）
   const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
   visionClient = new ImageAnnotatorClient({ credentials });
+  // GOOGLE_APPLICATION_CREDENTIALSを削除してファイルパスとして誤認識されないようにする
+  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 } else {
   // ファイルパスから読み込む（ローカル環境用）
   const authPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
