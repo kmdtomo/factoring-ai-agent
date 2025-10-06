@@ -7,7 +7,7 @@
     "dev": "mastra dev",
     "dev:playground": "node start-playground.js",
     "build": "mastra build && node fix-telemetry.js",
-    "start": "node fix-telemetry.js && node --import=./.mastra/output/instrumentation.mjs .mastra/output/index.mjs",
+    "start": "node start-with-fix.js",
     "start:prod": "./start.sh"
   },
   "keywords": [],
