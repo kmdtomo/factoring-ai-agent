@@ -8,3 +8,6 @@ dist
 *.db-*
 credentials/
 *.json
+!vercel.json
+!package.json
+!tsconfig.json
