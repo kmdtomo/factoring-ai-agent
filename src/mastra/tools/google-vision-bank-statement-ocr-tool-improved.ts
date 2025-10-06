@@ -217,31 +217,53 @@ export const googleVisionBankStatementOcrToolImproved = createTool({
                   const response = result.responses[0];
                   const pages = response.responses || [];
                   
+                  console.log(`    [DEBUG] バッチ${batch + 1}: ${pages.length}ページのレスポンス取得`);
+                  
                   // ★改善ポイント: fullTextAnnotation と textAnnotations を併用
                   for (const page of pages) {
                     const texts: string[] = [];
                     
+                    // 🔍 デバッグ: pageオブジェクトの構造を確認
+                    console.log(`    [DEBUG] ページ${totalProcessedPages + 1}: オブジェクトキー = ${Object.keys(page).join(', ')}`);
+                    console.log(`    [DEBUG]   - fullTextAnnotation存在: ${!!page.fullTextAnnotation}`);
+                    console.log(`    [DEBUG]   - textAnnotations存在: ${!!page.textAnnotations}`);
+                    console.log(`    [DEBUG]   - textAnnotations長さ: ${page.textAnnotations?.length || 0}`);
+                    
                     // 方法1: fullTextAnnotation（ページ全体のテキスト）
                     if (page.fullTextAnnotation?.text) {
                       texts.push(page.fullTextAnnotation.text);
+                      console.log(`    [DEBUG]   - fullTextAnnotation: ${page.fullTextAnnotation.text.length}文字`);
+                    } else {
+                      console.log(`    [DEBUG]   - fullTextAnnotation: なし`);
                     }
                     
                     // 方法2: textAnnotations（個別テキストブロック）
                     // ※ マーカー付き部分も個別ブロックとして認識される可能性が高い
                     if (page.textAnnotations && page.textAnnotations.length > 0) {
+                      console.log(`    [DEBUG]   - textAnnotations処理開始: ${page.textAnnotations.length}件`);
+                      
                       // 最初のtextAnnotationsはページ全体なのでスキップ
                       const individualTexts = page.textAnnotations
                         .slice(1)  // 0番目はページ全体なので除外
                         .map((annotation: any) => annotation.description)
                         .filter((text: string) => text && text.trim().length > 0);
                       
+                      console.log(`    [DEBUG]   - 個別テキスト（0番目除外後）: ${individualTexts.length}件`);
+                      
                       // 個別テキストを結合（重複排除付き）
                       const uniqueTexts = [...new Set(individualTexts)];
                       
+                      console.log(`    [DEBUG]   - ユニーク化後: ${uniqueTexts.length}件`);
+                      
                       if (uniqueTexts.length > 0) {
                         texts.push('\n--- 個別検出テキスト ---\n' + uniqueTexts.join(' '));
-                        console.log(`    + 個別検出: ${uniqueTexts.length}件のテキストブロック`);
+                        console.log(`    ✓ 個別検出: ${uniqueTexts.length}件のテキストブロック`);
+                        console.log(`    [DEBUG]   - サンプル（最初の3件）: ${uniqueTexts.slice(0, 3).join(', ')}`);
+                      } else {
+                        console.log(`    [DEBUG]   - ユニークテキストが0件`);
                       }
+                    } else {
+                      console.log(`    [DEBUG]   - textAnnotations: なしまたは空配列`);
                     }
                     
                     if (texts.length > 0) {

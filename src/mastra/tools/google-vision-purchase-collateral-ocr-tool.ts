@@ -3,6 +3,8 @@ import { z } from "zod";
 import axios from "axios";
 import vision from '@google-cloud/vision';
 import path from 'path';
+import { generateObject } from 'ai';
+import { openai } from '@ai-sdk/openai';
 
 // 環境変数の認証ファイルパスが相対パスの場合、絶対パスに変換
 const authPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -50,16 +52,21 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
       pageCount: z.number().describe("ページ数"),
       confidence: z.number().describe("信頼度"),
       tokenEstimate: z.number().describe("推定トークン数"),
-    })).describe("買取請求書ドキュメントリスト"),
+      documentType: z.string().describe("文書種別（請求書、登記情報、債権譲渡概要、名刺など）"),
+      extractedFacts: z.record(z.any()).describe("文書から抽出された事実情報（ネスト構造も可能）"),
+    })).describe("買取情報フィールドのドキュメントリスト"),
     collateralDocuments: z.array(z.object({
       fileName: z.string().describe("ファイル名"),
       text: z.string().describe("抽出されたテキスト"),
       pageCount: z.number().describe("ページ数"),
       confidence: z.number().describe("信頼度"),
       tokenEstimate: z.number().describe("推定トークン数"),
+      documentType: z.string().describe("文書種別（担保謄本、登記情報など）"),
+      extractedFacts: z.record(z.any()).describe("文書から抽出された事実情報（ネスト構造も可能）"),
     })).describe("担保謄本ドキュメントリスト"),
     costAnalysis: z.object({
       googleVisionCost: z.number(),
+      classificationCost: z.number().describe("文書分類AIコスト"),
       perDocumentType: z.object({
         purchase: z.number(),
         collateral: z.number(),
@@ -102,6 +109,7 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
           collateralDocuments: [],
           costAnalysis: {
             googleVisionCost: 0,
+            classificationCost: 0,
             perDocumentType: { purchase: 0, collateral: 0 },
             estimatedSavings: 0,
           },
@@ -111,29 +119,19 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
       
       const record = recordResponse.data.records[0];
       
-      // 2. 買取請求書と担保謄本のファイルを取得
-      const allPurchaseFiles = record[purchaseFieldName]?.value || [];
-      const allCollateralFiles = record[collateralFieldName]?.value || [];
+      // 2. 買取請求書と担保謄本のファイルを取得（全ファイル処理）
+      const purchaseFiles = record[purchaseFieldName]?.value || [];
+      const collateralFiles = record[collateralFieldName]?.value || [];
       
-      // ファイル名に"請求"が含まれるもののみをフィルタリング
-      const purchaseFiles = allPurchaseFiles.filter((file: any) => 
-        file.name && file.name.includes("請求")
-      );
-      const collateralFiles = allCollateralFiles.filter((file: any) => 
-        file.name && file.name.includes("請求")
-      );
-      
-      console.log(`[買取・担保OCR] フィルタリング結果:`);
-      console.log(`  - 買取請求書: 全${allPurchaseFiles.length}件 → "請求"を含むファイル${purchaseFiles.length}件`);
-      console.log(`  - 担保謄本: 全${allCollateralFiles.length}件 → "請求"を含むファイル${collateralFiles.length}件`);
+      console.log(`[買取・担保OCR] 処理対象:`);
+      console.log(`  - 買取情報フィールド: ${purchaseFiles.length}件`);
+      console.log(`  - 担保情報フィールド: ${collateralFiles.length}件`);
       console.log(`  - 処理対象合計: ${purchaseFiles.length + collateralFiles.length}件`);
       
-      if (allPurchaseFiles.length > purchaseFiles.length) {
-        console.log(`[買取・担保OCR] 除外されたファイル（買取）:`);
-        allPurchaseFiles.forEach((file: any) => {
-          if (!file.name.includes("請求")) {
-            console.log(`  - ${file.name}`);
-          }
+      if (purchaseFiles.length > 0) {
+        console.log(`[買取・担保OCR] 買取情報ファイル一覧:`);
+        purchaseFiles.forEach((file: any) => {
+          console.log(`  - ${file.name}`);
         });
       }
       
@@ -429,9 +427,88 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
         return { results, totalCost };
       };
       
-      // 3. 両方のドキュメントタイプを並列処理
-      console.log("\n=== 買取請求書の処理開始 ===");
-      const purchaseProcessing = processFiles(purchaseFiles, "買取請求書");
+      // 3. 文書分類と情報抽出の関数（汎用的・事実ベース）
+      const classifyAndExtractInfo = async (document: any) => {
+        try {
+          // テキストの最初の2000文字のみを使用（コスト削減）
+          const textSample = document.text.substring(0, 2000);
+
+          // 汎用的なスキーマ：何が入っていたかの事実を記録
+          const schema = z.object({
+            documentType: z.string().describe("文書種別（請求書、登記情報、債権譲渡概要、名刺、契約書など、文書に記載されている内容から自由に判定）"),
+            extractedFacts: z.record(z.any()).describe("抽出された事実情報（会社名、資本金、設立年月日、代表者名、請求額、期日など、文書から読み取れる情報を柔軟に記録。ネスト構造も可能）"),
+          });
+
+          const result = await generateObject({
+            model: openai("gpt-4o"),
+            schema,
+            prompt: `以下の文書のOCRテキストを分析し、文書種別と抽出可能な情報を記録してください。
+
+【重要】
+- 文書種別は固定の選択肢ではなく、文書の内容から自由に判定してください
+- 抽出された情報は、何が記載されていたかの「事実」を記録してください
+- 型にはめず、存在する情報を柔軟に抽出してください
+- 情報が存在しない場合は、そのフィールドを含めないでください
+
+【OCRテキスト】
+${textSample}
+
+【抽出例】
+登記情報の場合:
+{
+  "documentType": "登記情報",
+  "extractedFacts": {
+    "会社名": "株式会社〇〇",
+    "資本金": 10000000,
+    "設立年月日": "2020年1月1日",
+    "代表者名": "山田太郎"
+  }
+}
+
+債権譲渡概要の場合:
+{
+  "documentType": "債権譲渡概要",
+  "extractedFacts": {
+    "会社名": "株式会社〇〇",
+    "譲渡債権額": 5000000,
+    "譲渡日": "2024年12月1日",
+    "状態": "閉鎖" または "現在"
+  }
+}
+
+請求書の場合:
+{
+  "documentType": "請求書",
+  "extractedFacts": {
+    "請求元": "株式会社〇〇",
+    "請求先": "株式会社△△",
+    "請求額": 1000000,
+    "支払期日": "2024年12月31日"
+  }
+}`,
+          });
+
+          const inputCost = (result.usage?.totalTokens || 0) * 0.000003 * 0.5;
+          const outputCost = (result.usage?.totalTokens || 0) * 0.000015 * 0.5;
+
+          return {
+            documentType: result.object.documentType,
+            extractedFacts: result.object.extractedFacts,
+            classificationCost: inputCost + outputCost,
+          };
+        } catch (error) {
+          console.error(`[文書分類] エラー (${document.fileName}):`, error);
+          return {
+            documentType: "分類不能",
+            extractedFacts: {},
+            classificationCost: 0,
+          };
+        }
+      };
+      
+      // 4. 両方のドキュメントタイプを並列処理
+      console.log("\n=== 買取情報フィールドの処理開始 ===");
+      const purchaseProcessing = processFiles(purchaseFiles, "買取情報");
       
       console.log("\n=== 担保謄本の処理開始 ===");
       const collateralProcessing = processFiles(collateralFiles, "担保謄本");
@@ -442,33 +519,80 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
         collateralProcessing,
       ]);
       
+      // 5. 買取情報ファイルと担保ファイルの文書分類と情報抽出
+      console.log("\n=== 文書分類・情報抽出開始 ===");
+      let totalClassificationCost = 0;
+
+      // 買取情報ファイルの分類
+      const classifiedPurchaseDocuments = await Promise.all(
+        purchaseResult.results.map(async (doc) => {
+          console.log(`[文書分類] ${doc.fileName} を分析中...`);
+          const classification = await classifyAndExtractInfo(doc);
+          totalClassificationCost += classification.classificationCost;
+
+          console.log(`  → 種別: ${classification.documentType}`);
+          if (classification.extractedFacts && Object.keys(classification.extractedFacts).length > 0) {
+            console.log(`  → 抽出された情報:`, classification.extractedFacts);
+          }
+
+          return {
+            ...doc,
+            documentType: classification.documentType,
+            extractedFacts: classification.extractedFacts,
+          };
+        })
+      );
+
+      // 担保ファイルの分類
+      const classifiedCollateralDocuments = await Promise.all(
+        collateralResult.results.map(async (doc) => {
+          console.log(`[文書分類] ${doc.fileName} を分析中...`);
+          const classification = await classifyAndExtractInfo(doc);
+          totalClassificationCost += classification.classificationCost;
+
+          console.log(`  → 種別: ${classification.documentType}`);
+          if (classification.extractedFacts && Object.keys(classification.extractedFacts).length > 0) {
+            console.log(`  → 抽出された情報:`, classification.extractedFacts);
+          }
+
+          return {
+            ...doc,
+            documentType: classification.documentType,
+            extractedFacts: classification.extractedFacts,
+          };
+        })
+      );
+      
       // コスト分析
       const totalGoogleVisionCost = purchaseResult.totalCost + collateralResult.totalCost;
       const estimatedClaudeCost = totalGoogleVisionCost * 58.5; // 58.5倍のコスト
       const estimatedSavings = ((estimatedClaudeCost - totalGoogleVisionCost) / estimatedClaudeCost) * 100;
       
       console.log("\n[買取・担保OCR] 処理結果:");
-      console.log(`  - 買取請求書: ${purchaseResult.results.length}件処理`);
+      console.log(`  - 買取情報: ${classifiedPurchaseDocuments.length}件処理`);
       console.log(`  - 担保謄本: ${collateralResult.results.length}件処理`);
-      console.log(`  - 総コスト: $${totalGoogleVisionCost.toFixed(4)}`);
+      console.log(`  - OCRコスト: $${totalGoogleVisionCost.toFixed(4)}`);
+      console.log(`  - 分類コスト: $${totalClassificationCost.toFixed(4)}`);
+      console.log(`  - 総コスト: $${(totalGoogleVisionCost + totalClassificationCost).toFixed(4)}`);
       
       return {
         success: true,
         processingDetails: {
           recordId,
           processedFiles: {
-            purchase: purchaseResult.results.length,
-            collateral: collateralResult.results.length,
-            total: purchaseResult.results.length + collateralResult.results.length,
+            purchase: classifiedPurchaseDocuments.length,
+            collateral: classifiedCollateralDocuments.length,
+            total: classifiedPurchaseDocuments.length + classifiedCollateralDocuments.length,
           },
-          totalPages: purchaseResult.results.reduce((sum, doc) => sum + doc.pageCount, 0) +
-                      collateralResult.results.reduce((sum, doc) => sum + doc.pageCount, 0),
+          totalPages: classifiedPurchaseDocuments.reduce((sum, doc) => sum + doc.pageCount, 0) +
+                      classifiedCollateralDocuments.reduce((sum, doc) => sum + doc.pageCount, 0),
           timestamp,
         },
-        purchaseDocuments: purchaseResult.results,
-        collateralDocuments: collateralResult.results,
+        purchaseDocuments: classifiedPurchaseDocuments,
+        collateralDocuments: classifiedCollateralDocuments,
         costAnalysis: {
           googleVisionCost: totalGoogleVisionCost,
+          classificationCost: totalClassificationCost,
           perDocumentType: {
             purchase: purchaseResult.totalCost,
             collateral: collateralResult.totalCost,
@@ -492,6 +616,7 @@ export const googleVisionPurchaseCollateralOcrTool = createTool({
         collateralDocuments: [],
         costAnalysis: {
           googleVisionCost: 0,
+          classificationCost: 0,
           perDocumentType: { purchase: 0, collateral: 0 },
           estimatedSavings: 0,
         },

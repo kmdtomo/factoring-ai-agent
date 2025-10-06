@@ -10,6 +10,8 @@ import { agentBasedComplianceWorkflow } from './workflows/agent-based-compliance
 import { phase1PurchaseCollateralWorkflow } from './workflows/phase1-purchase-collateral-workflow';
 import { phase2BankStatementWorkflow } from './workflows/phase2-bank-statement-workflow';
 import { phase3VerificationWorkflow } from './workflows/phase3-verification-workflow';
+import { phase4FinalAnalysisWorkflow } from './workflows/phase4-final-analysis-workflow';
+import { integratedWorkflow } from './workflows/integrated-workflow';
 import { complianceAgent } from './agents/compliance-agent';
 import { complianceAgentV2 } from './agents/compliance-agent-v2';
 import { simpleComplianceAgent } from './agents/simple-compliance-agent';
@@ -32,10 +34,12 @@ export const mastra = new Mastra({
     // simpleComplianceWorkflow,  // 一時無効化
     // multiAgentComplianceWorkflow, // 旧版（ツール直接呼び出し）
     // splitPhaseWorkflow,           // 旧版（データ受け渡しなし）
+    integratedWorkflow,               // ← 統合ワークフロー（Phase 1-4完全版）🎯 推奨
     agentBasedComplianceWorkflow,    // ← エージェントベース版（7000文字問題あり）
-    phase1PurchaseCollateralWorkflow, // ← Phase 1：エージェントレス設計（推奨）
-    phase2BankStatementWorkflow,      // ← Phase 2：通帳分析（NEW）
-    phase3VerificationWorkflow,       // ← Phase 3：本人確認・企業実在性確認（NEW）
+    phase1PurchaseCollateralWorkflow, // ← Phase 1：エージェントレス設計
+    phase2BankStatementWorkflow,      // ← Phase 2：通帳分析
+    phase3VerificationWorkflow,       // ← Phase 3：本人確認・企業実在性確認
+    phase4FinalAnalysisWorkflow,      // ← Phase 4：最終分析・レポート生成
   },
   agents: { 
     // complianceAgentV2,         // ワークフロー完成により一時無効化
