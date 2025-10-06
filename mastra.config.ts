@@ -1,2 +1,5 @@
-// Telemetry completely disabled to avoid build issues
-export const telemetry = undefined;
+// Explicitly disable telemetry with minimal config
+export const telemetry = {
+  enabled: false,
+  disableLocalExport: true,
+};
