@@ -1,4 +1,4 @@
-import { Step } from "@mastra/core";
+import { createStep } from "@mastra/core/workflows";
 import { z } from "zod";
 import { phase1PurchaseCollateralStep } from "./phase1-purchase-collateral-step";
 import { phase2BankStatementStep } from "./phase2-bank-statement-step";
@@ -14,7 +14,7 @@ import { phase3VerificationStep } from "./phase3-verification-step";
  *
  * 全てのPhaseが完了するまで待機（一番遅いPhaseに合わせる）
  */
-export const parallelPhase123Step = new Step({
+export const parallelPhase123Step = createStep({
   id: "parallel-phase123-step",
   description: "Phase 1-3を並列実行",
 
@@ -30,9 +30,9 @@ export const parallelPhase123Step = new Step({
     parallelExecutionTime: z.string(),
   }),
 
-  execute: async ({ context }) => {
+  execute: async ({ inputData, runId }) => {
     const startTime = Date.now();
-    const { recordId } = context;
+    const { recordId } = inputData;
 
     console.log(`[並列実行] Phase 1-3を並列実行開始: recordId=${recordId}`);
 
@@ -40,20 +40,20 @@ export const parallelPhase123Step = new Step({
     const [phase1Result, phase2Result, phase3Result] = await Promise.all([
       // Phase 1: 買取・担保情報処理
       phase1PurchaseCollateralStep.execute({
-        context: { recordId },
-        machineContext: {},
+        inputData: { recordId },
+        runId,
       }),
 
       // Phase 2: 通帳分析
       phase2BankStatementStep.execute({
-        context: { recordId },
-        machineContext: {},
+        inputData: { recordId },
+        runId,
       }),
 
       // Phase 3: 本人確認・企業実在性確認
       phase3VerificationStep.execute({
-        context: { recordId },
-        machineContext: {},
+        inputData: { recordId },
+        runId,
       }),
     ]);
 
@@ -65,11 +65,12 @@ export const parallelPhase123Step = new Step({
     console.log(`  ✅ Phase 2: ${phase2Result.結果サマリー?.処理時間 || '不明'}`);
     console.log(`  ✅ Phase 3: ${phase3Result.結果サマリー?.処理時間 || '不明'}`);
 
+    // Phase 1-3の実データを抽出（ネストされた phase1Results, phase2Results, phase3Results）
     return {
       recordId,
-      phase1Results: phase1Result,
-      phase2Results: phase2Result,
-      phase3Results: phase3Result,
+      phase1Results: phase1Result.phase1Results || phase1Result,
+      phase2Results: phase2Result.phase2Results || phase2Result,
+      phase3Results: phase3Result.phase3Results || phase3Result,
       parallelExecutionTime: `${duration}秒`,
     };
   },
