@@ -19,9 +19,10 @@ export { telemetry };`;
 // Fix immediately before starting
 fixTelemetry();
 
-// Start the server
-const serverProcess = spawn('node', ['--import=./.mastra/output/instrumentation.mjs', '.mastra/output/index.mjs'], {
-  stdio: 'inherit'
+// Start the server from the .mastra/output directory
+const serverProcess = spawn('node', ['--import=./instrumentation.mjs', 'index.mjs'], {
+  stdio: 'inherit',
+  cwd: '.mastra/output'
 });
 
 serverProcess.on('exit', (code) => {
