@@ -1,7 +1,2 @@
-export const telemetry = {
-  enabled: false,
-  serviceName: 'factoring-ai-agent',
-  sampling: {
-    enabled: false
-  }
-};
+// Telemetry completely disabled to avoid build issues
+export const telemetry = undefined;
