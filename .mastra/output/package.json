@@ -10,7 +10,7 @@
   "author": "Mastra",
   "license": "ISC",
   "dependencies": {
-    "pino": "9.13.0",
+    "pino": "9.13.1",
     "pino-pretty": "13.1.1",
     "@libsql/client": "latest",
     "@google-cloud/vision": "5.3.3",

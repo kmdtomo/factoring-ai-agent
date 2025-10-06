@@ -3,7 +3,6 @@ node_modules
 dist
 .mastra/*
 !.mastra/output
-.mastra/output/tools/
 .env.development
 .env
 *.db
