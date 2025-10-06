@@ -2,6 +2,7 @@ output.txt
 node_modules
 dist
 .mastra
+!.mastra/output
 .env.development
 .env
 *.db
@@ -11,3 +12,4 @@ credentials/
 !vercel.json
 !package.json
 !tsconfig.json
+!.mastra/output/**/*.json
